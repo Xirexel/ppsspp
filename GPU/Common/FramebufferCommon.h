@@ -77,7 +77,7 @@ struct VirtualFramebuffer {
 	bool firstFrameSaved;
 
 	u32 fb_address;
-	u32 z_address;
+	u32 z_address;  // If 0, it's a "RAM" framebuffer.
 	int fb_stride;
 	int z_stride;
 
@@ -228,7 +228,7 @@ public:
 	void RebindFramebuffer();
 	std::vector<FramebufferInfo> GetFramebufferList();
 
-	void CopyDisplayToOutput();
+	void CopyDisplayToOutput(bool reallyDirty);
 
 	bool NotifyFramebufferCopy(u32 src, u32 dest, int size, bool isMemset, u32 skipDrawReason);
 	void NotifyVideoUpload(u32 addr, int size, int width, GEBufferFormat fmt);
@@ -262,6 +262,10 @@ public:
 	}
 	GEBufferFormat DisplayFramebufFormat() {
 		return displayFramebuf_ ? displayFormat_ : GE_FORMAT_INVALID;
+	}
+
+	bool UseBufferedRendering() {
+		return useBufferedRendering_;
 	}
 
 	bool MayIntersectFramebuffer(u32 start) {
@@ -339,7 +343,7 @@ protected:
 	void CopyFramebufferForColorTexture(VirtualFramebuffer *dst, VirtualFramebuffer *src, int flags);
 
 	void EstimateDrawingSize(u32 fb_address, GEBufferFormat fb_format, int viewport_width, int viewport_height, int region_width, int region_height, int scissor_width, int scissor_height, int fb_stride, int &drawing_width, int &drawing_height);
-	u32 FramebufferByteSize(const VirtualFramebuffer *vfb) const;
+	u32 ColorBufferByteSize(const VirtualFramebuffer *vfb) const;
 
 	void NotifyRenderFramebufferCreated(VirtualFramebuffer *vfb);
 	void NotifyRenderFramebufferUpdated(VirtualFramebuffer *vfb, bool vfbFormatChanged);
@@ -383,6 +387,7 @@ protected:
 	u32 displayFramebufPtr_ = 0;
 	u32 displayStride_ = 0;
 	GEBufferFormat displayFormat_;
+	u32 prevDisplayFramebufPtr_ = 0;
 
 	VirtualFramebuffer *displayFramebuf_ = nullptr;
 	VirtualFramebuffer *prevDisplayFramebuf_ = nullptr;

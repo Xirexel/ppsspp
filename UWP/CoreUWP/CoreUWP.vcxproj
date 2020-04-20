@@ -501,6 +501,7 @@
     <ClInclude Include="..\..\Core\HLE\sceUsbAcc.h" />
     <ClInclude Include="..\..\Core\HLE\sceUsbCam.h" />
     <ClInclude Include="..\..\Core\HLE\sceUsbGps.h" />
+    <ClInclude Include="..\..\Core\HLE\sceUsbMic.h" />
     <ClInclude Include="..\..\Core\HLE\sceUtility.h" />
     <ClInclude Include="..\..\Core\HLE\sceVaudio.h" />
     <ClInclude Include="..\..\Core\HLE\ThreadQueueList.h" />
@@ -508,6 +509,7 @@
     <ClInclude Include="..\..\Core\Host.h" />
     <ClInclude Include="..\..\Core\HW\AsyncIOManager.h" />
     <ClInclude Include="..\..\Core\HW\BufferQueue.h" />
+    <ClInclude Include="..\..\Core\HW\Camera.h" />
     <ClInclude Include="..\..\Core\HW\MediaEngine.h" />
     <ClInclude Include="..\..\Core\HW\MemoryStick.h" />
     <ClInclude Include="..\..\Core\HW\MpegDemux.h" />
@@ -567,7 +569,6 @@
     <ClInclude Include="..\..\Core\Util\DisArm64.h" />
     <ClInclude Include="..\..\Core\Util\GameManager.h" />
     <ClInclude Include="..\..\Core\Util\PPGeDraw.h" />
-    <ClInclude Include="..\..\Core\Util\ppge_atlas.h" />
     <ClInclude Include="..\..\Core\WaveFile.h" />
     <ClInclude Include="..\..\ext\disarm.h" />
     <ClInclude Include="..\..\ext\sfmt19937\SFMT-common.h" />
@@ -712,11 +713,13 @@
     <ClCompile Include="..\..\Core\HLE\sceUsbAcc.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUsbCam.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUsbGps.cpp" />
+    <ClCompile Include="..\..\Core\HLE\sceUsbMic.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUtility.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceVaudio.cpp" />
     <ClCompile Include="..\..\Core\HLE\__sceAudio.cpp" />
     <ClCompile Include="..\..\Core\Host.cpp" />
     <ClCompile Include="..\..\Core\HW\AsyncIOManager.cpp" />
+    <ClCompile Include="..\..\Core\HW\Camera.cpp" />
     <ClCompile Include="..\..\Core\HW\MediaEngine.cpp" />
     <ClCompile Include="..\..\Core\HW\MemoryStick.cpp" />
     <ClCompile Include="..\..\Core\HW\MpegDemux.cpp" />
@@ -802,7 +805,6 @@
     <ClCompile Include="..\..\Core\Util\DisArm64.cpp" />
     <ClCompile Include="..\..\Core\Util\GameManager.cpp" />
     <ClCompile Include="..\..\Core\Util\PPGeDraw.cpp" />
-    <ClCompile Include="..\..\Core\Util\ppge_atlas.cpp" />
     <ClCompile Include="..\..\Core\WaveFile.cpp" />
     <ClCompile Include="..\..\ext\disarm.cpp" />
     <ClCompile Include="..\..\ext\sfmt19937\SFMT.c">

@@ -72,6 +72,7 @@
 #include "Windows/W32Util/ShellUtil.h"
 #include "Windows/W32Util/Misc.h"
 #include "Windows/RawInput.h"
+#include "Windows/CaptureDevice.h"
 #include "Windows/TouchInputHandler.h"
 #include "Windows/MainWindowMenu.h"
 #include "GPU/GPUInterface.h"
@@ -132,7 +133,6 @@ namespace MainWindow
 	// gross hack
 	bool noFocusPause = false;	// TOGGLE_PAUSE state to override pause on lost focus
 	bool trapMouse = true; // Handles some special cases(alt+tab, win menu) when game is running and mouse is confined
-	bool mouseScrollUsed = false;
 
 #define MAX_LOADSTRING 100
 	const TCHAR *szWindowClass = TEXT("PPSSPPWnd");
@@ -154,7 +154,7 @@ namespace MainWindow
 		// Register classes - Main Window
 		WNDCLASSEX wcex;
 		memset(&wcex, 0, sizeof(wcex));
-		wcex.cbSize = sizeof(WNDCLASSEX); 
+		wcex.cbSize = sizeof(WNDCLASSEX);
 		wcex.style = 0;  // Show in taskbar
 		wcex.lpfnWndProc = (WNDPROC)WndProc;
 		wcex.hInstance = hInstance;
@@ -228,7 +228,7 @@ namespace MainWindow
 			if (++g_Config.iInternalResolution > RESOLUTION_MAX)
 				g_Config.iInternalResolution = 0;
 		}
-		
+
 		// Taking auto-texture scaling into account
 		if (g_Config.iTexScalingLevel == TEXSCALING_AUTO)
 			setTexScalingMultiplier(0);
@@ -259,8 +259,7 @@ namespace MainWindow
 		}
 	}
 
-	void RelaseMouseWheel() {
-		if (mouseScrollUsed) {
+	void ReleaseMouseWheel() {
 			// For simplicity release both wheel events
 			KeyInput key;
 			key.deviceId = DEVICE_ID_MOUSE;
@@ -269,8 +268,6 @@ namespace MainWindow
 			NativeKey(key);
 			key.keyCode = NKCODE_EXT_MOUSEWHEEL_UP;
 			NativeKey(key);
-			mouseScrollUsed = false;
-		}
 	}
 
 	static void HandleSizeChange(int newSizingType) {
@@ -332,7 +329,7 @@ namespace MainWindow
 			dwStyle &= ~WS_POPUP;
 			// Re-add caption and border styles.
 			dwStyle |= WS_OVERLAPPEDWINDOW;
-			
+
 			// Put back the menu bar.
 			::SetMenu(hWnd, menu);
 		} else {
@@ -440,7 +437,7 @@ namespace MainWindow
 			bool portrait = g_Config.IsPortrait();
 
 			// We want to adjust for DPI but still get an integer pixel scaling ratio.
-			double dpi_scale = 96.0 / System_GetPropertyInt(SYSPROP_DISPLAY_DPI);
+			double dpi_scale = 96.0 / System_GetPropertyFloat(SYSPROP_DISPLAY_DPI);
 			int scale = (int)ceil(2.0 / dpi_scale);
 
 			GetWindowSizeAtResolution(scale * (portrait ? 272 : 480), scale * (portrait ? 480 : 272), &windowWidth, &windowHeight);
@@ -550,7 +547,7 @@ namespace MainWindow
 		if (disasmWindow[0])
 			delete disasmWindow[0];
 		disasmWindow[0] = 0;
-		
+
 #if PPSSPP_API(ANY_GL)
 		DialogManager::RemoveDlg(geDebuggerWindow);
 		if (geDebuggerWindow)
@@ -674,27 +671,6 @@ namespace MainWindow
 			}
 			break;
 
-		case WM_MOUSEWHEEL:
-		{
-			int wheelDelta = (short)(wParam >> 16);
-			KeyInput key;
-			key.deviceId = DEVICE_ID_MOUSE;
-
-			if (wheelDelta < 0) {
-				key.keyCode = NKCODE_EXT_MOUSEWHEEL_DOWN;
-				wheelDelta = -wheelDelta;
-			} else {
-				key.keyCode = NKCODE_EXT_MOUSEWHEEL_UP;
-			}
-			// There's no separate keyup event for mousewheel events,
-			// so we set mouseScrollUsed here and always release if it's true.
-			key.flags = KEY_DOWN | KEY_HASWHEELDELTA | (wheelDelta << 16);
-			mouseScrollUsed = true;
-			SetTimer(hwndMain, TIMER_WHEELRELEASE, WHEELRELEASE_DELAY_MS, 0);
-			NativeKey(key);
-		}
-		break;
-
 		case WM_TOUCH:
 			{
 				touchHandler.handleTouchEvent(hWnd, message, wParam, lParam);
@@ -706,7 +682,7 @@ namespace MainWindow
 		}
 		return 0;
 	}
-	
+
 	LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)	{
 		switch (message) {
 		case WM_CREATE:
@@ -715,7 +691,7 @@ namespace MainWindow
 				RemoveMenu(GetMenu(hWnd), ID_OPTIONS_DIRECT3D11, MF_BYCOMMAND);
 			}
 			break;
-			
+
 		case WM_GETMINMAXINFO:
 			{
 				MINMAXINFO *minmax = reinterpret_cast<MINMAXINFO *>(lParam);
@@ -807,6 +783,27 @@ namespace MainWindow
 			}
 			break;
 
+		// Wheel events have to stay in WndProc for compatibility with older Windows(7). See #12156
+		case WM_MOUSEWHEEL:
+			{
+				int wheelDelta = (short)(wParam >> 16);
+				KeyInput key;
+				key.deviceId = DEVICE_ID_MOUSE;
+
+				if (wheelDelta < 0) {
+					key.keyCode = NKCODE_EXT_MOUSEWHEEL_DOWN;
+					wheelDelta = -wheelDelta;
+				} else {
+					key.keyCode = NKCODE_EXT_MOUSEWHEEL_UP;
+				}
+				// There's no separate keyup event for mousewheel events,
+				// so we release it with a slight delay.
+				key.flags = KEY_DOWN | KEY_HASWHEELDELTA | (wheelDelta << 16);
+				SetTimer(hwndMain, TIMER_WHEELRELEASE, WHEELRELEASE_DELAY_MS, 0);
+				NativeKey(key);
+			}
+			break;
+
 		case WM_TIMER:
 			// Hack: Take the opportunity to also show/hide the mouse cursor in fullscreen mode.
 			switch (wParam) {
@@ -818,9 +815,10 @@ namespace MainWindow
 				hideCursor = true;
 				KillTimer(hWnd, TIMER_CURSORMOVEUPDATE);
 				return 0;
-			// Hack: need to release wheel event without waiting for another wheel event.
+			// Hack: need to release wheel event with a delay for games to register it was "pressed down".
 			case TIMER_WHEELRELEASE:
-				RelaseMouseWheel();
+				ReleaseMouseWheel();
+				KillTimer(hWnd, TIMER_WHEELRELEASE);
 				return 0;
 			}
 			break;
@@ -851,6 +849,7 @@ namespace MainWindow
 #ifndef _M_ARM
 			DinputDevice::CheckDevices();
 #endif
+			WindowsCaptureDevice::CheckDevices();
 			return DefWindowProc(hWnd, message, wParam, lParam);
 
 		case WM_VERYSLEEPY_MSG:
@@ -976,10 +975,10 @@ namespace MainWindow
 		case WM_SYSCOMMAND:
 			{
 				switch (wParam) {
-				case SC_SCREENSAVE:  
+				case SC_SCREENSAVE:
 					return 0;
 				case SC_MONITORPOWER:
-					return 0;      
+					return 0;
 				}
 				return DefWindowProc(hWnd, message, wParam, lParam);
 			}
@@ -989,7 +988,7 @@ namespace MainWindow
 		}
 		return 0;
 	}
-	
+
 	void Redraw() {
 		InvalidateRect(hwndDisplay,0,0);
 	}

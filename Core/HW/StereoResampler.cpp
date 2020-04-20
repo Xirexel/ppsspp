@@ -71,7 +71,7 @@ StereoResampler::StereoResampler()
 
 	// Some Android devices are v-synced to non-60Hz framerates. We simply timestretch audio to fit.
 	// TODO: should only do this if auto frameskip is off?
-	float refresh = System_GetPropertyInt(SYSPROP_DISPLAY_REFRESH_RATE) / 1000.0f;
+	float refresh = System_GetPropertyFloat(SYSPROP_DISPLAY_REFRESH_RATE);
 
 	// If framerate is "close"...
 	if (refresh != 60.0f && refresh > 50.0f && refresh < 70.0f) {
@@ -137,12 +137,19 @@ inline void ClampBufferToS16(s16 *out, const s32 *in, size_t size, s8 volShift) 
 }
 
 inline void ClampBufferToS16WithVolume(s16 *out, const s32 *in, size_t size) {
-	if (g_Config.iGlobalVolume >= VOLUME_MAX) {
+	int volume = g_Config.iGlobalVolume;
+	if (PSP_CoreParameter().fpsLimit != FPSLimit::NORMAL || PSP_CoreParameter().unthrottle) {
+		if (g_Config.iAltSpeedVolume != -1) {
+			volume = g_Config.iAltSpeedVolume;
+		}
+	}
+
+	if (volume >= VOLUME_MAX) {
 		ClampBufferToS16<false>(out, in, size, 0);
-	} else if (g_Config.iGlobalVolume <= VOLUME_OFF) {
+	} else if (volume <= VOLUME_OFF) {
 		memset(out, 0, size * sizeof(s16));
 	} else {
-		ClampBufferToS16<true>(out, in, size, VOLUME_MAX - (s8)g_Config.iGlobalVolume);
+		ClampBufferToS16<true>(out, in, size, VOLUME_MAX - (s8)volume);
 	}
 }
 
@@ -286,4 +293,6 @@ void StereoResampler::DoState(PointerWrap &p) {
 	auto s = p.Section("resampler", 1);
 	if (!s)
 		return;
+	if (p.mode == p.MODE_READ)
+		Clear();
 }

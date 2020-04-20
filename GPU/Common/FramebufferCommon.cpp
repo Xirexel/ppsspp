@@ -187,7 +187,7 @@ VirtualFramebuffer *FramebufferManagerCommon::GetVFBAt(u32 addr) {
 	return match;
 }
 
-u32 FramebufferManagerCommon::FramebufferByteSize(const VirtualFramebuffer *vfb) const {
+u32 FramebufferManagerCommon::ColorBufferByteSize(const VirtualFramebuffer *vfb) const {
 	return vfb->fb_stride * vfb->height * (vfb->format == GE_FORMAT_8888 ? 4 : 2);
 }
 
@@ -209,6 +209,7 @@ void FramebufferManagerCommon::SetNumExtraFBOs(int num) {
 }
 
 // Heuristics to figure out the size of FBO to create.
+// TODO: Possibly differentiate on whether through mode is used (since in through mode, viewport is meaningless?)
 void FramebufferManagerCommon::EstimateDrawingSize(u32 fb_address, GEBufferFormat fb_format, int viewport_width, int viewport_height, int region_width, int region_height, int scissor_width, int scissor_height, int fb_stride, int &drawing_width, int &drawing_height) {
 	static const int MAX_FRAMEBUF_HEIGHT = 512;
 
@@ -232,6 +233,10 @@ void FramebufferManagerCommon::EstimateDrawingSize(u32 fb_address, GEBufferForma
 		if (scissor_width <= fb_stride && scissor_width > drawing_width && scissor_height <= MAX_FRAMEBUF_HEIGHT) {
 			drawing_width = scissor_width;
 			drawing_height = std::max(drawing_height, scissor_height);
+		}
+		if (scissor_width == 481 && region_width == 480 && scissor_height == 273 && region_height == 272) {
+			drawing_width = 480;
+			drawing_height = 272;
 		}
 	} else {
 		// If viewport wasn't valid, let's just take the greatest anything regardless of stride.
@@ -440,8 +445,7 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(const Frame
 		vfb->usageFlags = FB_USAGE_RENDERTARGET;
 		SetColorUpdated(vfb, skipDrawReason);
 
-		u32 byteSize = FramebufferByteSize(vfb);
-		// FB heuristics always produce an address in VRAM (this is during rendering) so we don't need to poke in the 0x04000000 flag here.
+		u32 byteSize = ColorBufferByteSize(vfb);
 		if (Memory::IsVRAMAddress(params.fb_address) && params.fb_address + byteSize > framebufRangeEnd_) {
 			framebufRangeEnd_ = params.fb_address + byteSize;
 		}
@@ -846,7 +850,7 @@ void FramebufferManagerCommon::SetViewport2D(int x, int y, int w, int h) {
 	draw_->SetViewports(1, &vp);
 }
 
-void FramebufferManagerCommon::CopyDisplayToOutput() {
+void FramebufferManagerCommon::CopyDisplayToOutput(bool reallyDirty) {
 	DownloadFramebufferOnSwitch(currentRenderVfb_);
 	shaderManager_->DirtyLastShader();
 
@@ -869,16 +873,20 @@ void FramebufferManagerCommon::CopyDisplayToOutput() {
 	CardboardSettings cardboardSettings;
 	GetCardboardSettings(&cardboardSettings);
 
-	VirtualFramebuffer *vfb = GetVFBAt(displayFramebufPtr_);
+	// If it's not really dirty, we're probably frameskipping.  Use the last working one.
+	u32 fbaddr = reallyDirty ? displayFramebufPtr_ : prevDisplayFramebufPtr_;
+	prevDisplayFramebufPtr_ = fbaddr;
+
+	VirtualFramebuffer *vfb = GetVFBAt(fbaddr);
 	if (!vfb) {
 		// Let's search for a framebuf within this range. Note that we also look for
-		// "framebuffers" sitting in RAM so we only take off the kernel and uncached bits of the address
-		// when comparing.
-		const u32 addr = displayFramebufPtr_ & 0x3FFFFFFF;
+		// "framebuffers" sitting in RAM (created from block transfer or similar) so we only take off the kernel
+		// and uncached bits of the address when comparing.
+		const u32 addr = fbaddr & 0x3FFFFFFF;
 		for (size_t i = 0; i < vfbs_.size(); ++i) {
 			VirtualFramebuffer *v = vfbs_[i];
 			const u32 v_addr = v->fb_address & 0x3FFFFFFF;
-			const u32 v_size = FramebufferByteSize(v);
+			const u32 v_size = ColorBufferByteSize(v);
 			if (addr >= v_addr && addr < v_addr + v_size) {
 				const u32 dstBpp = v->format == GE_FORMAT_8888 ? 4 : 2;
 				const u32 v_offsetX = ((addr - v_addr) / dstBpp) % v->fb_stride;
@@ -912,7 +920,7 @@ void FramebufferManagerCommon::CopyDisplayToOutput() {
 	}
 
 	if (!vfb) {
-		if (Memory::IsValidAddress(displayFramebufPtr_)) {
+		if (Memory::IsValidAddress(fbaddr)) {
 			// The game is displaying something directly from RAM. In GTA, it's decoded video.
 			if (!vfb) {
 				shaderManager_->DirtyLastShader();
@@ -923,12 +931,12 @@ void FramebufferManagerCommon::CopyDisplayToOutput() {
 				// Just a pointer to plain memory to draw. We should create a framebuffer, then draw to it.
 				SetViewport2D(0, 0, pixelWidth_, pixelHeight_);
 				draw_->SetScissorRect(0, 0, pixelWidth_, pixelHeight_);
-				DrawFramebufferToOutput(Memory::GetPointer(displayFramebufPtr_), displayFormat_, displayStride_, true);
+				DrawFramebufferToOutput(Memory::GetPointer(fbaddr), displayFormat_, displayStride_, true);
 				gstate_c.Dirty(DIRTY_BLEND_STATE);
 				return;
 			}
 		} else {
-			DEBUG_LOG(FRAMEBUF, "Found no FBO to display! displayFBPtr = %08x", displayFramebufPtr_);
+			DEBUG_LOG(FRAMEBUF, "Found no FBO to display! displayFBPtr = %08x", fbaddr);
 			// No framebuffer to display! Clear to black.
 			if (useBufferedRendering_) {
 				shaderManager_->DirtyLastShader();
@@ -1010,11 +1018,10 @@ void FramebufferManagerCommon::CopyDisplayToOutput() {
 			CalculatePostShaderUniforms(vfb->bufferWidth, vfb->bufferHeight, renderWidth_, renderHeight_, &uniforms);
 			BindPostShader(uniforms);
 			DrawTextureFlags flags = g_Config.iBufFilter == SCALE_LINEAR ? DRAWTEX_LINEAR : DRAWTEX_NEAREST;
-			flags = flags | DRAWTEX_TO_BACKBUFFER;
 			DrawActiveTexture(0, 0, fbo_w, fbo_h, fbo_w, fbo_h, 0.0f, 0.0f, 1.0f, 1.0f, ROTATION_LOCKED_HORIZONTAL, flags);
 
-			draw_->SetScissorRect(0, 0, pixelWidth_, pixelHeight_);
 			draw_->BindFramebufferAsRenderTarget(nullptr, { Draw::RPAction::CLEAR, Draw::RPAction::CLEAR, Draw::RPAction::CLEAR });
+			draw_->SetScissorRect(0, 0, pixelWidth_, pixelHeight_);
 
 			// Use the extra FBO, with applied post-processing shader, as a texture.
 			// fbo_bind_as_texture(extraFBOs_[0], FB_COLOR_BIT, 0);
@@ -1031,7 +1038,7 @@ void FramebufferManagerCommon::CopyDisplayToOutput() {
 			Bind2DShader();
 			flags = (!postShaderIsUpscalingFilter_ && g_Config.iBufFilter == SCALE_LINEAR) ? DRAWTEX_LINEAR : DRAWTEX_NEAREST;
 			flags = flags | DRAWTEX_TO_BACKBUFFER;
-			if (g_Config.bEnableCardboard) {
+			if (g_Config.bEnableCardboardVR) {
 				// Left Eye Image
 				SetViewport2D(cardboardSettings.leftEyeXPosition, cardboardSettings.screenYPosition, cardboardSettings.screenWidth, cardboardSettings.screenHeight);
 				DrawActiveTexture(x, y, w, h, (float)pixelWidth_, (float)pixelHeight_, u0, v0, u1, v1, ROTATION_LOCKED_HORIZONTAL, flags | DRAWTEX_KEEP_TEX);
@@ -1059,7 +1066,7 @@ void FramebufferManagerCommon::CopyDisplayToOutput() {
 			PostShaderUniforms uniforms{};
 			CalculatePostShaderUniforms(vfb->bufferWidth, vfb->bufferHeight, vfb->renderWidth, vfb->renderHeight, &uniforms);
 			BindPostShader(uniforms);
-			if (g_Config.bEnableCardboard) {
+			if (g_Config.bEnableCardboardVR) {
 				// Left Eye Image
 				SetViewport2D(cardboardSettings.leftEyeXPosition, cardboardSettings.screenYPosition, cardboardSettings.screenWidth, cardboardSettings.screenHeight);
 				DrawActiveTexture(x, y, w, h, (float)pixelWidth_, (float)pixelHeight_, u0, v0, u1, v1, ROTATION_LOCKED_HORIZONTAL, flags | DRAWTEX_KEEP_TEX);
@@ -1229,7 +1236,7 @@ bool FramebufferManagerCommon::NotifyFramebufferCopy(u32 src, u32 dst, int size,
 
 		// We only remove the kernel and uncached bits when comparing.
 		const u32 vfb_address = vfb->fb_address & 0x3FFFFFFF;
-		const u32 vfb_size = FramebufferByteSize(vfb);
+		const u32 vfb_size = ColorBufferByteSize(vfb);
 		const u32 vfb_bpp = vfb->format == GE_FORMAT_8888 ? 4 : 2;
 		const u32 vfb_byteStride = vfb->fb_stride * vfb_bpp;
 		const int vfb_byteWidth = vfb->width * vfb_bpp;
@@ -1335,7 +1342,7 @@ void FramebufferManagerCommon::FindTransferFramebuffers(VirtualFramebuffer *&dst
 	for (size_t i = 0; i < vfbs_.size(); ++i) {
 		VirtualFramebuffer *vfb = vfbs_[i];
 		const u32 vfb_address = vfb->fb_address & 0x3FFFFFFF;
-		const u32 vfb_size = FramebufferByteSize(vfb);
+		const u32 vfb_size = ColorBufferByteSize(vfb);
 		const u32 vfb_bpp = vfb->format == GE_FORMAT_8888 ? 4 : 2;
 		const u32 vfb_byteStride = vfb->fb_stride * vfb_bpp;
 		const u32 vfb_byteWidth = vfb->width * vfb_bpp;
@@ -1351,7 +1358,8 @@ void FramebufferManagerCommon::FindTransferFramebuffers(VirtualFramebuffer *&dst
 
 			// Some games use mismatching bitdepths.  But make sure the stride matches.
 			// If it doesn't, generally this means we detected the framebuffer with too large a height.
-			bool match = yOffset < dstYOffset && (int)yOffset <= (int)vfb->height - dstHeight;
+			// Use bufferHeight in case of buffers that resize up and down often per frame (Valkyrie Profile.)
+			bool match = yOffset < dstYOffset && (int)yOffset <= (int)vfb->bufferHeight - dstHeight;
 			if (match && vfb_byteStride != byteStride) {
 				// Grand Knights History copies with a mismatching stride but a full line at a time.
 				// Makes it hard to detect the wrong transfers in e.g. God of War.
@@ -1381,7 +1389,7 @@ void FramebufferManagerCommon::FindTransferFramebuffers(VirtualFramebuffer *&dst
 			const u32 byteOffset = srcBasePtr - vfb_address;
 			const u32 byteStride = srcStride * bpp;
 			const u32 yOffset = byteOffset / byteStride;
-			bool match = yOffset < srcYOffset && (int)yOffset <= (int)vfb->height - srcHeight;
+			bool match = yOffset < srcYOffset && (int)yOffset <= (int)vfb->bufferHeight - srcHeight;
 			if (match && vfb_byteStride != byteStride) {
 				if (width != srcStride || (byteStride * height != vfb_byteStride && byteStride * height != vfb_byteWidth)) {
 					match = false;
@@ -1425,6 +1433,8 @@ VirtualFramebuffer *FramebufferManagerCommon::CreateRAMFramebuffer(uint32_t fbAd
 	float renderWidthFactor = renderWidth_ / 480.0f;
 	float renderHeightFactor = renderHeight_ / 272.0f;
 
+	DEBUG_LOG(G3D, "Creating RAM framebuffer at %08x (%dx%d, stride %d, format %d)", fbAddress, width, height, stride, format);
+
 	// A target for the destination is missing - so just create one!
 	// Make sure this one would be found by the algorithm above so we wouldn't
 	// create a new one each frame.
@@ -1450,6 +1460,12 @@ VirtualFramebuffer *FramebufferManagerCommon::CreateRAMFramebuffer(uint32_t fbAd
 	textureCache_->NotifyFramebuffer(vfb->fb_address, vfb, NOTIFY_FB_CREATED);
 	vfb->fbo = draw_->CreateFramebuffer({ vfb->renderWidth, vfb->renderHeight, 1, 1, true, (Draw::FBColorDepth)vfb->colorDepth });
 	vfbs_.push_back(vfb);
+
+	u32 byteSize = ColorBufferByteSize(vfb);
+	if (fbAddress + byteSize > framebufRangeEnd_) {
+		framebufRangeEnd_ = fbAddress + byteSize;
+	}
+
 	return vfb;
 }
 
@@ -1749,7 +1765,7 @@ void FramebufferManagerCommon::SetRenderSize(VirtualFramebuffer *vfb) {
 		force1x = vfb->bufferWidth <= 256 || vfb->bufferHeight <= 128;
 		break;
 	case 3:
-		force1x = vfb->bufferWidth < 480 || vfb->bufferHeight < 272;
+		force1x = vfb->bufferWidth < 480 || vfb->bufferWidth > 800 || vfb->bufferHeight < 272; // GOW uses ‭864‬x272
 		break;
 	}
 
@@ -1854,7 +1870,7 @@ void FramebufferManagerCommon::GetCardboardSettings(CardboardSettings *cardboard
 	float cardboardUserYShift = g_Config.iCardboardYShift / 100.0f * cardboardMaxYShift;
 	float cardboardScreenY = cardboardMaxYShift + cardboardUserYShift;
 
-	cardboardSettings->enabled = g_Config.bEnableCardboard;
+	cardboardSettings->enabled = g_Config.bEnableCardboardVR;
 	cardboardSettings->leftEyeXPosition = cardboardLeftEyeX;
 	cardboardSettings->rightEyeXPosition = cardboardRightEyeX;
 	cardboardSettings->screenYPosition = cardboardScreenY;
@@ -1898,7 +1914,7 @@ void FramebufferManagerCommon::UpdateFramebufUsage(VirtualFramebuffer *vfb) {
 }
 
 void FramebufferManagerCommon::ShowScreenResolution() {
-	I18NCategory *gr = GetI18NCategory("Graphics");
+	auto gr = GetI18NCategory("Graphics");
 
 	std::ostringstream messageStream;
 	messageStream << gr->T("Internal Resolution") << ": ";

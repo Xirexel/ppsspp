@@ -8,6 +8,9 @@
 
 #include "Core/System.h"
 #include "SDLVulkanGraphicsContext.h"
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+#include "SDLCocoaMetalLayer.h"
+#endif
 
 bool SDLVulkanGraphicsContext::Init(SDL_Window *&window, int x, int y, int mode, std::string *error_message) {
 	window = SDL_CreateWindow("Initializing Vulkan...", x, y, pixel_xres, pixel_yres, mode);
@@ -24,14 +27,12 @@ bool SDLVulkanGraphicsContext::Init(SDL_Window *&window, int x, int y, int mode,
 
 	Version gitVer(PPSSPP_GIT_VERSION);
 
-	vulkan_ = new VulkanContext();
-	if (vulkan_->InitError().size()) {
-		*error_message = vulkan_->InitError();
-		delete vulkan_;
-		vulkan_ = nullptr;
+	if (!VulkanLoad()) {
+		*error_message = "Failed to load Vulkan driver library";
 		return false;
 	}
 
+	vulkan_ = new VulkanContext();
 	int vulkanFlags = VULKAN_FLAG_PRESENT_MAILBOX;
 	// vulkanFlags |= VULKAN_FLAG_VALIDATE;
 	VulkanContext::CreateInfo info{};
@@ -52,7 +53,6 @@ bool SDLVulkanGraphicsContext::Init(SDL_Window *&window, int x, int y, int mode,
 		return false;
 	}
 
-#if !defined(__APPLE__)
 	SDL_SysWMinfo sys_info{};
 	SDL_VERSION(&sys_info.version); //Set SDL version
 	if (!SDL_GetWindowWMInfo(window, &sys_info)) {
@@ -74,12 +74,22 @@ bool SDLVulkanGraphicsContext::Init(SDL_Window *&window, int x, int y, int mode,
 		vulkan_->InitSurface(WINDOWSYSTEM_WAYLAND, (void*)sys_info.info.wl.display, (void *)sys_info.info.wl.surface);
 		break;
 #endif
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+#if defined(PPSSPP_PLATFORM_MAC)
+	case SDL_SYSWM_COCOA:
+		vulkan_->InitSurface(WINDOWSYSTEM_METAL_EXT, makeWindowMetalCompatible(sys_info.info.cocoa.window), nullptr);
+		break;
+#else
+	case SDL_SYSWM_UIKIT:
+		vulkan_->InitSurface(WINDOWSYSTEM_METAL_EXT, makeWindowMetalCompatible(sys_info.info.uikit.window), nullptr);
+		break;
+#endif
+#endif
 	default:
 		fprintf(stderr, "Vulkan subsystem %d not supported\n", sys_info.subsystem);
 		exit(1);
 		break;
 	}
-#endif
 
 	if (!vulkan_->InitObjects()) {
 		*error_message = vulkan_->InitError();

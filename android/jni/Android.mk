@@ -183,7 +183,6 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/MIPS/IR/IRInterpreter.cpp \
   $(SRC)/Core/MIPS/IR/IRPassSimplify.cpp \
   $(SRC)/Core/MIPS/IR/IRRegCache.cpp \
-  $(SRC)/UI/ui_atlas.cpp \
   $(SRC)/ext/libkirk/AES.c \
   $(SRC)/ext/libkirk/amctrl.c \
   $(SRC)/ext/libkirk/SHA1.c \
@@ -245,6 +244,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/Common/ShaderUniforms.cpp \
   $(SRC)/GPU/Debugger/Breakpoints.cpp \
   $(SRC)/GPU/Debugger/Debugger.cpp \
+  $(SRC)/GPU/Debugger/Playback.cpp \
   $(SRC)/GPU/Debugger/Record.cpp \
   $(SRC)/GPU/Debugger/Stepping.cpp \
   $(SRC)/GPU/GLES/FramebufferManagerGLES.cpp \
@@ -264,6 +264,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/Software/Clipper.cpp \
   $(SRC)/GPU/Software/Lighting.cpp \
   $(SRC)/GPU/Software/Rasterizer.cpp.arm \
+  $(SRC)/GPU/Software/RasterizerRectangle.cpp.arm \
   $(SRC)/GPU/Software/Sampler.cpp \
   $(SRC)/GPU/Software/SoftGpu.cpp \
   $(SRC)/GPU/Software/TransformUnit.cpp \
@@ -273,6 +274,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/ELF/ParamSFO.cpp \
   $(SRC)/Core/HW/SimpleAudioDec.cpp \
   $(SRC)/Core/HW/AsyncIOManager.cpp \
+  $(SRC)/Core/HW/Camera.cpp \
   $(SRC)/Core/HW/MemoryStick.cpp \
   $(SRC)/Core/HW/MpegDemux.cpp.arm \
   $(SRC)/Core/HW/MediaEngine.cpp.arm \
@@ -393,6 +395,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/HLE/sceUsbAcc.cpp \
   $(SRC)/Core/HLE/sceUsbCam.cpp \
   $(SRC)/Core/HLE/sceUsbGps.cpp \
+  $(SRC)/Core/HLE/sceUsbMic.cpp \
   $(SRC)/Core/HLE/sceUtility.cpp \
   $(SRC)/Core/HLE/sceVaudio.cpp \
   $(SRC)/Core/HLE/scePspNpDrm_user.cpp \
@@ -413,7 +416,6 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/Util/AudioFormat.cpp \
   $(SRC)/Core/Util/GameManager.cpp \
   $(SRC)/Core/Util/BlockAllocator.cpp \
-  $(SRC)/Core/Util/ppge_atlas.cpp \
   $(SRC)/Core/Util/PPGeDraw.cpp \
   $(SRC)/git-version.cpp
 
@@ -492,6 +494,7 @@ LOCAL_SRC_FILES := \
   $(SRC)/android/jni/native-audio-so.cpp \
   $(SRC)/UI/BackgroundAudio.cpp \
   $(SRC)/UI/DiscordIntegration.cpp \
+  $(SRC)/UI/ChatScreen.cpp \
   $(SRC)/UI/DevScreens.cpp \
   $(SRC)/UI/DisplayLayoutEditor.cpp \
   $(SRC)/UI/DisplayLayoutScreen.cpp \

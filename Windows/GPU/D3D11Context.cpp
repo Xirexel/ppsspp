@@ -6,6 +6,7 @@
 #include <cassert>
 
 #include "base/logging.h"
+#include "Base/display.h"
 #include "util/text/utf8.h"
 #include "i18n/i18n.h"
 
@@ -41,16 +42,19 @@ D3D11Context::~D3D11Context() {
 }
 
 void D3D11Context::SwapBuffers() {
-	swapChain_->Present(0, 0);
+	swapChain_->Present(swapInterval_, 0);
 	draw_->HandleEvent(Draw::Event::PRESENTED, 0, 0, nullptr, nullptr);
 }
 
 void D3D11Context::SwapInterval(int interval) {
-	// Dummy
+	swapInterval_ = interval;
 }
 
 HRESULT D3D11Context::CreateTheDevice(IDXGIAdapter *adapter) {
 	bool windowed = true;
+	// D3D11 has no need for display rotation.
+	g_display_rotation = DisplayRotation::ROTATE_0;
+	g_display_rot_matrix.setIdentity();
 #if defined(_DEBUG) && !defined(_M_ARM) && !defined(_M_ARM64)
 	UINT createDeviceFlags = D3D11_CREATE_DEVICE_DEBUG;
 #else
@@ -138,7 +142,7 @@ bool D3D11Context::Init(HINSTANCE hInst, HWND wnd, std::string *error_message) {
 	if (FAILED(hr)) {
 
 		const char *defaultError = "Your GPU does not appear to support Direct3D 11.\n\nWould you like to try again using Direct3D 9 instead?";
-		I18NCategory *err = GetI18NCategory("Error");
+		auto err = GetI18NCategory("Error");
 
 		std::wstring error;
 

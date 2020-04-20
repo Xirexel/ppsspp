@@ -6,6 +6,7 @@
 #include "profiler/profiler.h"
 
 #include "Common/ColorConv.h"
+#include "Common/GraphicsContext.h"
 #include "Core/Reporting.h"
 #include "GPU/GeDisasm.h"
 #include "GPU/GPU.h"
@@ -188,10 +189,10 @@ const CommonCommandTableEntry commonCommandTable[] = {
 	// Viewport.
 	{ GE_CMD_OFFSETX, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
 	{ GE_CMD_OFFSETY, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
-	{ GE_CMD_VIEWPORTXSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_VIEWPORTSCISSOR_STATE },
-	{ GE_CMD_VIEWPORTYSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_VIEWPORTSCISSOR_STATE },
-	{ GE_CMD_VIEWPORTXCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_VIEWPORTSCISSOR_STATE },
-	{ GE_CMD_VIEWPORTYCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_VIEWPORTSCISSOR_STATE },
+	{ GE_CMD_VIEWPORTXSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
+	{ GE_CMD_VIEWPORTYSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
+	{ GE_CMD_VIEWPORTXCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
+	{ GE_CMD_VIEWPORTYCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
 	{ GE_CMD_VIEWPORTZSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_DEPTHRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
 	{ GE_CMD_VIEWPORTZCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_DEPTHRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
 	{ GE_CMD_DEPTHCLAMPENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_RASTER_STATE },
@@ -408,6 +409,7 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 	}
 
 	UpdateCmdInfo();
+	UpdateVsyncInterval(true);
 }
 
 GPUCommon::~GPUCommon() {
@@ -432,6 +434,7 @@ void GPUCommon::UpdateCmdInfo() {
 }
 
 void GPUCommon::BeginHostFrame() {
+	UpdateVsyncInterval(resized_);
 	ReapplyGfxState();
 
 	// TODO: Assume config may have changed - maybe move to resize.
@@ -456,6 +459,31 @@ void GPUCommon::Reinitialize() {
 	busyTicks = 0;
 	timeSpentStepping_ = 0.0;
 	interruptsEnabled_ = true;
+}
+
+void GPUCommon::UpdateVsyncInterval(bool force) {
+#ifdef _WIN32
+	int desiredVSyncInterval = g_Config.bVSync ? 1 : 0;
+	if (PSP_CoreParameter().unthrottle) {
+		desiredVSyncInterval = 0;
+	}
+	if (PSP_CoreParameter().fpsLimit != FPSLimit::NORMAL) {
+		int limit = PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM1 ? g_Config.iFpsLimit1 : g_Config.iFpsLimit2;
+		// For an alternative speed that is a clean factor of 60, the user probably still wants vsync.
+		if (limit == 0 || (limit >= 0 && limit != 15 && limit != 30 && limit != 60)) {
+			desiredVSyncInterval = 0;
+		}
+	}
+
+	if (desiredVSyncInterval != lastVsync_ || force) {
+		// Disabled EXT_swap_control_tear for now, it never seems to settle at the correct timing
+		// so it just keeps tearing. Not what I hoped for... (gl_extensions.EXT_swap_control_tear)
+		// See http://developer.download.nvidia.com/opengl/specs/WGL_EXT_swap_control_tear.txt
+		if (gfxCtx_)
+			gfxCtx_->SwapInterval(desiredVSyncInterval);
+		lastVsync_ = desiredVSyncInterval;
+	}
+#endif
 }
 
 int GPUCommon::EstimatePerVertexCost() {
@@ -720,6 +748,8 @@ u32 GPUCommon::EnqueueList(u32 listpc, u32 stall, int subIntrBase, PSPPointer<Ps
 			if (currentList->state != PSP_GE_DL_STATE_PAUSED)
 				return SCE_KERNEL_ERROR_INVALID_VALUE;
 			currentList->state = PSP_GE_DL_STATE_QUEUED;
+			// Make sure we clear the signal so we don't try to pause it again.
+			currentList->signal = PSP_GE_SIGNAL_NONE;
 		}
 
 		dl.state = PSP_GE_DL_STATE_PAUSED;
@@ -786,8 +816,7 @@ u32 GPUCommon::Continue() {
 
 	if (currentList->state == PSP_GE_DL_STATE_PAUSED)
 	{
-		if (!isbreak)
-		{
+		if (!isbreak) {
 			// TODO: Supposedly this returns SCE_KERNEL_ERROR_BUSY in some case, previously it had
 			// currentList->signal == PSP_GE_SIGNAL_HANDLER_PAUSE, but it doesn't reproduce.
 
@@ -799,9 +828,10 @@ u32 GPUCommon::Continue() {
 
 			// We have a list now, so it's not complete.
 			drawCompleteTicks = (u64)-1;
-		}
-		else
+		} else {
 			currentList->state = PSP_GE_DL_STATE_QUEUED;
+			currentList->signal = PSP_GE_SIGNAL_NONE;
+		}
 	}
 	else if (currentList->state == PSP_GE_DL_STATE_RUNNING)
 	{
@@ -1511,11 +1541,9 @@ void GPUCommon::Execute_Prim(u32 op, u32 diff) {
 
 	// Discard AA lines as we can't do anything that makes sense with these anyway. The SW plugin might, though.
 	if (gstate.isAntiAliasEnabled()) {
-		// Discard AA lines in DOA
-		if (prim == GE_PRIM_LINE_STRIP)
-			return;
-		// Discard AA lines in Summon Night 5
-		if ((prim == GE_PRIM_LINES) && gstate.isSkinningEnabled())
+		// Heuristic derived from discussions in #6483 and #12588.
+		// Discard AA lines in Persona 3 Portable, DOA Paradise and Summon Night 5, while still keeping AA lines in Echochrome.
+		if ((prim == GE_PRIM_LINE_STRIP || prim == GE_PRIM_LINES) && gstate.getTextureFunction() == GE_TEXFUNC_REPLACE)
 			return;
 	}
 
@@ -1775,7 +1803,7 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 
 	SetDrawType(DRAW_BEZIER, PatchPrimToPrim(surface.primType));
 
-	if (CanUseHardwareTessellation(surface.primType)) {
+	if (drawEngineCommon_->CanUseHardwareTessellation(surface.primType)) {
 		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
 		gstate_c.bezier = true;
 		if (gstate_c.spline_num_points_u != surface.num_points_u) {
@@ -1841,7 +1869,7 @@ void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 
 	SetDrawType(DRAW_SPLINE, PatchPrimToPrim(surface.primType));
 
-	if (CanUseHardwareTessellation(surface.primType)) {
+	if (drawEngineCommon_->CanUseHardwareTessellation(surface.primType)) {
 		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
 		gstate_c.spline = true;
 		if (gstate_c.spline_num_points_u != surface.num_points_u) {
@@ -2446,6 +2474,14 @@ void GPUCommon::InterruptEnd(int listid) {
 		}
 		dl.waitTicks = 0;
 		__GeTriggerWait(GPU_SYNC_LIST, listid);
+
+		// Make sure the list isn't still queued since it's now completed.
+		if (!dlQueue.empty()) {
+			if (listid == dlQueue.front())
+				PopDLQueue();
+			else
+				dlQueue.remove(listid);
+		}
 	}
 
 	ProcessDLQueue();

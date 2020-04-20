@@ -81,6 +81,7 @@
 #include "sceHeap.h"
 #include "sceDmac.h"
 #include "sceMp4.h"
+#include "sceUsbCam.h"
 
 #include "../Util/PPGeDraw.h"
 
@@ -143,6 +144,7 @@ void __KernelInit()
 	__AudioCodecInit();
 	__VideoPmpInit();
 	__UsbGpsInit();
+	__UsbCamInit();
 	
 	SaveState::Init();  // Must be after IO, as it may create a directory
 	Reporting::Init();
@@ -165,6 +167,9 @@ void __KernelShutdown()
 	INFO_LOG(SCEKERNEL, "Shutting down kernel - %i kernel objects alive", kernelObjects.GetCount());
 	hleCurrentThreadName = NULL;
 	kernelObjects.Clear();
+
+	__UsbCamShutdown();
+	__UsbGpsShutdown();
 
 	__AudioCodecShutdown();
 	__VideoPmpShutdown();
@@ -734,7 +739,7 @@ const HLEFunction ThreadManForUser[] =
 	{0X3B183E26, &WrapI_I<sceKernelGetThreadExitStatus>,             "sceKernelGetThreadExitStatus",              'i', "i"       },
 	{0X52089CA1, &WrapI_I<sceKernelGetThreadStackFreeSize>,          "sceKernelGetThreadStackFreeSize",           'i', "i"       },
 	{0XFFC36A14, &WrapU_UU<sceKernelReferThreadRunStatus>,           "sceKernelReferThreadRunStatus",             'x', "xx"      },
-	{0X17C1684E, &WrapU_UU<sceKernelReferThreadStatus>,              "sceKernelReferThreadStatus",                'x', "xx"      },
+	{0X17C1684E, &WrapU_UU<sceKernelReferThreadStatus>,              "sceKernelReferThreadStatus",                'i', "xp"      },
 	{0X2C34E053, &WrapI_I<sceKernelReleaseWaitThread>,               "sceKernelReleaseWaitThread",                'i', "i"       },
 	{0X75156E8F, &WrapI_I<sceKernelResumeThread>,                    "sceKernelResumeThread",                     'i', "i"       },
 	{0X3AD58B8C, &WrapU_V<sceKernelSuspendDispatchThread>,           "sceKernelSuspendDispatchThread",            'x', "",       HLE_NOT_IN_INTERRUPT },

@@ -84,19 +84,7 @@ const char *PresentModeString(VkPresentModeKHR presentMode) {
 }
 
 VulkanContext::VulkanContext() {
-#if SIMULATE_VULKAN_FAILURE == 1
-	return;
-#endif
-	if (!VulkanLoad()) {
-		init_error_ = "Failed to load Vulkan driver library";
-		// No DLL?
-		return;
-	}
-
-	// We can get the list of layers and extensions without an instance so we can use this information
-	// to enable the extensions we need that are available.
-	GetInstanceLayerProperties();
-	GetInstanceLayerExtensionList(nullptr, instance_extension_properties_);
+	// Do nothing here.
 }
 
 VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
@@ -105,6 +93,16 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
 
+	// We can get the list of layers and extensions without an instance so we can use this information
+	// to enable the extensions we need that are available.
+	GetInstanceLayerProperties();
+	GetInstanceLayerExtensionList(nullptr, instance_extension_properties_);
+
+	if (!IsInstanceExtensionAvailable(VK_KHR_SURFACE_EXTENSION_NAME)) {
+		// Cannot create a Vulkan display without VK_KHR_SURFACE_EXTENSION.
+		init_error_ = "Vulkan not loaded - no surface extension";
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
 	flags_ = info.flags;
 
 	// List extensions to try to enable.
@@ -125,6 +123,11 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
 	if (IsInstanceExtensionAvailable(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME)) {
 		instance_extensions_enabled_.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+	}
+#endif
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+	if (IsInstanceExtensionAvailable(VK_EXT_METAL_SURFACE_EXTENSION_NAME)) {
+		instance_extensions_enabled_.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
 	}
 #endif
 #endif
@@ -277,6 +280,14 @@ void VulkanContext::BeginFrame() {
 void VulkanContext::EndFrame() {
 	frame_[curFrame_].deleteList.Take(globalDeleteList_);
 	curFrame_++;
+	if (curFrame_ >= inflightFrames_) {
+		curFrame_ = 0;
+	}
+}
+
+void VulkanContext::UpdateInflightFrames(int n) {
+	assert(n >= 1 && n <= MAX_INFLIGHT_FRAMES);
+	inflightFrames_ = n;
 	if (curFrame_ >= inflightFrames_) {
 		curFrame_ = 0;
 	}
@@ -511,8 +522,8 @@ void VulkanContext::ChooseDevice(int physical_device) {
 	vkGetPhysicalDeviceQueueFamilyProperties(physical_devices_[physical_device_], &queue_count, nullptr);
 	assert(queue_count >= 1);
 
-	queue_props.resize(queue_count);
-	vkGetPhysicalDeviceQueueFamilyProperties(physical_devices_[physical_device_], &queue_count, queue_props.data());
+	queueFamilyProperties_.resize(queue_count);
+	vkGetPhysicalDeviceQueueFamilyProperties(physical_devices_[physical_device_], &queue_count, queueFamilyProperties_.data());
 	assert(queue_count >= 1);
 
 	// Detect preferred formats, in this order.
@@ -614,7 +625,7 @@ VkResult VulkanContext::CreateDevice() {
 	queue_info.pQueuePriorities = queue_priorities;
 	bool found = false;
 	for (int i = 0; i < (int)queue_count; i++) {
-		if (queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+		if (queueFamilyProperties_[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
 			queue_info.queueFamilyIndex = i;
 			found = true;
 			break;
@@ -762,6 +773,16 @@ VkResult VulkanContext::ReinitSurface() {
 		return vkCreateAndroidSurfaceKHR(instance_, &android, nullptr, &surface_);
 	}
 #endif
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+	case WINDOWSYSTEM_METAL_EXT:
+	{
+		VkMetalSurfaceCreateInfoEXT metal{ VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT };
+		metal.flags = 0;
+		metal.pLayer = winsysData1_;
+		metal.pNext = winsysData2_;
+		return vkCreateMetalSurfaceEXT(instance_, &metal, nullptr, &surface_);
+	}
+#endif
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
 	case WINDOWSYSTEM_XLIB:
 	{
@@ -811,7 +832,7 @@ bool VulkanContext::InitQueue() {
 	uint32_t graphicsQueueNodeIndex = UINT32_MAX;
 	uint32_t presentQueueNodeIndex = UINT32_MAX;
 	for (uint32_t i = 0; i < queue_count; i++) {
-		if ((queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+		if ((queueFamilyProperties_[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
 			if (graphicsQueueNodeIndex == UINT32_MAX) {
 				graphicsQueueNodeIndex = i;
 			}
@@ -846,7 +867,7 @@ bool VulkanContext::InitQueue() {
 	// Get the list of VkFormats that are supported:
 	uint32_t formatCount = 0;
 	VkResult res = vkGetPhysicalDeviceSurfaceFormatsKHR(physical_devices_[physical_device_], surface_, &formatCount, nullptr);
-	_assert_msg_(G3D, res == VK_SUCCESS, "Failed to get formats for device %p: %d surface: %p", physical_devices_[physical_device_], (int)res, surface_);
+	_assert_msg_(G3D, res == VK_SUCCESS, "Failed to get formats for device %d: %d", physical_device_, (int)res);
 	if (res != VK_SUCCESS) {
 		return false;
 	}
@@ -927,12 +948,6 @@ bool VulkanContext::InitSwapchain() {
 	swapChainExtent_.width = clamp(surfCapabilities_.currentExtent.width, surfCapabilities_.minImageExtent.width, surfCapabilities_.maxImageExtent.width);
 	swapChainExtent_.height = clamp(surfCapabilities_.currentExtent.height, surfCapabilities_.minImageExtent.height, surfCapabilities_.maxImageExtent.height);
 
-	if (physicalDeviceProperties_[physical_device_].properties.vendorID == VULKAN_VENDOR_IMGTEC) {
-		// Swap chain width hack to avoid issue #11743 (PowerVR driver bug).
-		// TODO: Check if still broken if pretransform is used!
-		swapChainExtent_.width &= ~31;
-	}
-
 	ILOG("swapChainExtent: %dx%d", swapChainExtent_.width, swapChainExtent_.height);
 
 	// TODO: Find a better way to specify the prioritized present mode while being able
@@ -942,20 +957,17 @@ bool VulkanContext::InitSwapchain() {
 		ILOG("Supported present mode: %d (%s)", presentModes[i], PresentModeString(presentModes[i]));
 	}
 	for (size_t i = 0; i < presentModeCount; i++) {
-		if (swapchainPresentMode == VK_PRESENT_MODE_MAX_ENUM_KHR) {
-			// Default to the first present mode from the list.
+		bool match = false;
+		match = match || ((flags_ & VULKAN_FLAG_PRESENT_MAILBOX) && presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR);
+		match = match || ((flags_ & VULKAN_FLAG_PRESENT_FIFO_RELAXED) && presentModes[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR);
+		match = match || ((flags_ & VULKAN_FLAG_PRESENT_FIFO) && presentModes[i] == VK_PRESENT_MODE_FIFO_KHR);
+		match = match || ((flags_ & VULKAN_FLAG_PRESENT_IMMEDIATE) && presentModes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR);
+
+		// Default to the first present mode from the list.
+		if (match || swapchainPresentMode == VK_PRESENT_MODE_MAX_ENUM_KHR) {
 			swapchainPresentMode = presentModes[i];
 		}
-		if ((flags_ & VULKAN_FLAG_PRESENT_MAILBOX) && presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
-			swapchainPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
-			break;
-		}
-		if ((flags_ & VULKAN_FLAG_PRESENT_FIFO_RELAXED) && presentModes[i] == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
-			swapchainPresentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-			break;
-		}
-		if ((flags_ & VULKAN_FLAG_PRESENT_IMMEDIATE) && presentModes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-			swapchainPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+		if (match) {
 			break;
 		}
 	}
@@ -976,10 +988,10 @@ bool VulkanContext::InitSwapchain() {
 		// Application must settle for fewer images than desired:
 		desiredNumberOfSwapChainImages = surfCapabilities_.maxImageCount;
 	}
-	
+
 	// We mostly follow the practices from
 	// https://arm-software.github.io/vulkan_best_practice_for_mobile_developers/samples/surface_rotation/surface_rotation_tutorial.html
-	// 
+	//
 	VkSurfaceTransformFlagBitsKHR preTransform;
 	std::string supportedTransforms = surface_transforms_to_string(surfCapabilities_.supportedTransforms);
 	std::string currentTransform = surface_transforms_to_string(surfCapabilities_.currentTransform);
@@ -1009,6 +1021,8 @@ bool VulkanContext::InitSwapchain() {
 			g_display_rot_matrix.setRotationZ270();
 			std::swap(swapChainExtent_.width, swapChainExtent_.height);
 			break;
+		default:
+			assert(false);
 		}
 	} else {
 		// Let the OS rotate the image (potentially slow on many Android devices)
@@ -1016,6 +1030,14 @@ bool VulkanContext::InitSwapchain() {
 	}
 	std::string preTransformStr = surface_transforms_to_string(preTransform);
 	ILOG("Chosen pretransform transform: %s", preTransformStr.c_str());
+
+	if (physicalDeviceProperties_[physical_device_].properties.vendorID == VULKAN_VENDOR_IMGTEC) {
+		ILOG("Applying PowerVR hack (rounding off the width!)");
+		// Swap chain width hack to avoid issue #11743 (PowerVR driver bug).
+		// To keep the size consistent even with pretransform, do this after the swap. Should be fine.
+		// This is fixed in newer PowerVR drivers but I don't know the cutoff.
+		swapChainExtent_.width &= ~31;
+	}
 
 	VkSwapchainCreateInfoKHR swap_chain_info{ VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
 	swap_chain_info.surface = surface_;
@@ -1388,4 +1410,44 @@ void VulkanContext::GetImageMemoryRequirements(VkImage image, VkMemoryRequiremen
 		vkGetImageMemoryRequirements(GetDevice(), image, mem_reqs);
 		*dedicatedAllocation = false;
 	}
+}
+
+bool IsHashMaliDriverVersion(const VkPhysicalDeviceProperties &props) {
+	// ARM used to put a hash in place of the driver version.
+	// Now they only use major versions. We'll just make a bad heuristic.
+	uint32_t major = VK_VERSION_MAJOR(props.driverVersion);
+	uint32_t minor = VK_VERSION_MINOR(props.driverVersion);
+	uint32_t branch = VK_VERSION_PATCH(props.driverVersion);
+	if (branch > 0)
+		return true;
+	if (branch > 100 || major > 100)
+		return true;
+	return false;
+}
+
+// From Sascha's code
+std::string FormatDriverVersion(const VkPhysicalDeviceProperties &props) {
+	if (props.vendorID == VULKAN_VENDOR_NVIDIA) {
+		// For whatever reason, NVIDIA has their own scheme.
+		// 10 bits = major version (up to r1023)
+		// 8 bits = minor version (up to 255)
+		// 8 bits = secondary branch version/build version (up to 255)
+		// 6 bits = tertiary branch/build version (up to 63)
+		uint32_t major = (props.driverVersion >> 22) & 0x3ff;
+		uint32_t minor = (props.driverVersion >> 14) & 0x0ff;
+		uint32_t secondaryBranch = (props.driverVersion >> 6) & 0x0ff;
+		uint32_t tertiaryBranch = (props.driverVersion) & 0x003f;
+		return StringFromFormat("%d.%d.%d.%d", major, minor, secondaryBranch, tertiaryBranch);
+	} else if (props.vendorID == VULKAN_VENDOR_ARM) {
+		// ARM used to just put a hash here. No point in splitting it up.
+		if (IsHashMaliDriverVersion(props)) {
+			return StringFromFormat("(hash) %08x", props.driverVersion);
+		}
+	}
+	// Qualcomm has an inscrutable versioning scheme. Let's just display it as normal.
+	// Standard scheme, use the standard macros.
+	uint32_t major = VK_VERSION_MAJOR(props.driverVersion);
+	uint32_t minor = VK_VERSION_MINOR(props.driverVersion);
+	uint32_t branch = VK_VERSION_PATCH(props.driverVersion);
+	return StringFromFormat("%d.%d.%d (%08x)", major, minor, branch, props.driverVersion);
 }
