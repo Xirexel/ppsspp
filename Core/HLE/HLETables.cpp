@@ -40,6 +40,7 @@
 #include "sceJpeg.h"
 #include "sceKernel.h"
 #include "sceKernelEventFlag.h"
+#include "sceKernelHeap.h"
 #include "sceKernelMemory.h"
 #include "sceKernelInterrupt.h"
 #include "sceKernelModule.h"
@@ -301,7 +302,7 @@ void RegisterAllModules() {
 	Register_KUBridge();
 	Register_sceUsbAcc();
 	Register_sceUsbMic();
-
+	Register_sceOpenPSID_driver();
 	// add new modules here.
 }
 

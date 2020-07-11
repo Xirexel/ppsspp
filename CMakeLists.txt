@@ -396,10 +396,10 @@ set(CommonWindows
 source_group(Windows FILES ${CommonWindows})
 
 set(CommonVulkan ${CommonExtra}
-	Common/Vulkan/VulkanContext.cpp
-	Common/Vulkan/VulkanContext.h
 	Common/Vulkan/VulkanDebug.cpp
 	Common/Vulkan/VulkanDebug.h
+	Common/Vulkan/VulkanContext.cpp
+	Common/Vulkan/VulkanContext.h
 	Common/Vulkan/VulkanImage.cpp
 	Common/Vulkan/VulkanImage.h
 	Common/Vulkan/VulkanLoader.cpp
@@ -1070,6 +1070,7 @@ add_library(native STATIC
 	ext/native/util/text/wrap_text.h
 	ext/native/util/text/wrap_text.cpp
 	ext/native/util/const_map.h
+	ext/native/util/tiny_set.h
 	ext/native/ext/jpge/jpgd.cpp
 	ext/native/ext/jpge/jpgd.h
 	ext/native/ext/jpge/jpge.cpp
@@ -1359,6 +1360,8 @@ set(GPU_SOURCES
 	GPU/Common/GPUStateUtils.h
 	GPU/Common/DrawEngineCommon.cpp
 	GPU/Common/DrawEngineCommon.h
+	GPU/Common/PresentationCommon.cpp
+	GPU/Common/PresentationCommon.h
 	GPU/Common/ShaderId.cpp
 	GPU/Common/ShaderId.h
 	GPU/Common/ShaderUniforms.cpp
@@ -1590,6 +1593,8 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/HLE/sceKernelAlarm.h
 	Core/HLE/sceKernelEventFlag.cpp
 	Core/HLE/sceKernelEventFlag.h
+	Core/HLE/sceKernelHeap.cpp
+	Core/HLE/sceKernelHeap.h
 	Core/HLE/sceKernelInterrupt.cpp
 	Core/HLE/sceKernelInterrupt.h
 	Core/HLE/sceKernelMbx.cpp
@@ -2063,6 +2068,7 @@ if(IOS)
 	add_custom_command(TARGET PPSSPP POST_BUILD
 		COMMAND mkdir -p \"${APP_DIR_NAME}\"
 		COMMAND tar -c -C ${CMAKE_CURRENT_BINARY_DIR} --exclude .DS_Store --exclude .git assets *.png | tar -x -C \"${APP_DIR_NAME}\"
+		COMMAND /bin/bash "${CMAKE_SOURCE_DIR}/ios/macbundle.sh" \"${APP_DIR_NAME}\"
 	)
 	set(MACOSX_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET})
 	set_target_properties(${TargetBin} PROPERTIES

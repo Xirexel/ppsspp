@@ -45,7 +45,7 @@ void UIScreen::DoRecreateViews() {
 
 			// Update layout and refocus so things scroll into view.
 			// This is for resizing down, when focused on something now offscreen.
-			UI::LayoutViewHierarchy(*screenManager()->getUIContext(), root_);
+			UI::LayoutViewHierarchy(*screenManager()->getUIContext(), root_, ignoreInsets_);
 			UI::View *focused = UI::GetFocusedView();
 			if (focused) {
 				root_->SubviewFocused(focused);
@@ -80,7 +80,7 @@ void UIScreen::preRender() {
 	}
 	draw->BeginFrame();
 	// Bind and clear the back buffer
-	draw->BindFramebufferAsRenderTarget(nullptr, { RPAction::CLEAR, RPAction::CLEAR, RPAction::CLEAR, 0xFF000000 });
+	draw->BindFramebufferAsRenderTarget(nullptr, { RPAction::CLEAR, RPAction::CLEAR, RPAction::CLEAR, 0xFF000000 }, "UI");
 	screenManager()->getUIContext()->BeginFrame();
 
 	Draw::Viewport viewport;
@@ -107,7 +107,7 @@ void UIScreen::render() {
 
 	if (root_) {
 		UIContext *uiContext = screenManager()->getUIContext();
-		UI::LayoutViewHierarchy(*uiContext, root_);
+		UI::LayoutViewHierarchy(*uiContext, root_, ignoreInsets_);
 
 		uiContext->PushTransform({translation_, scale_, alpha_});
 

@@ -459,6 +459,11 @@ void GPUCommon::Reinitialize() {
 	busyTicks = 0;
 	timeSpentStepping_ = 0.0;
 	interruptsEnabled_ = true;
+
+	if (textureCache_)
+		textureCache_->Clear(true);
+	if (framebufferManager_)
+		framebufferManager_->DestroyAllFBOs();
 }
 
 void GPUCommon::UpdateVsyncInterval(bool force) {
@@ -674,9 +679,14 @@ u32 GPUCommon::EnqueueList(u32 listpc, u32 stall, int subIntrBase, PSPPointer<Ps
 		return SCE_KERNEL_ERROR_INVALID_POINTER;
 	}
 
+	// If args->size is below 16, it's the old struct without stack info.
+	if (args.IsValid() && args->size >= 16 && args->numStacks >= 256) {
+		return hleLogError(G3D, SCE_KERNEL_ERROR_INVALID_SIZE, "invalid stack depth %d", args->numStacks);
+	}
+
 	int id = -1;
 	u64 currentTicks = CoreTiming::GetTicks();
-	u32_le stackAddr = args.IsValid() ? args->stackAddr : 0;
+	u32_le stackAddr = args.IsValid() && args->size >= 16 ? args->stackAddr : 0;
 	// Check compatibility
 	if (sceKernelGetCompiledSdkVersion() > 0x01FFFFFF) {
 		//numStacks = 0;
@@ -1116,6 +1126,9 @@ void GPUCommon::ReapplyGfxState() {
 	// The commands are embedded in the command memory so we can just reexecute the words. Convenient.
 	// To be safe we pass 0xFFFFFFFF as the diff.
 
+	// TODO: Consider whether any of this should really be done. We might be able to get all the way
+	// by simplying dirtying the appropriate gstate_c dirty flags.
+
 	for (int i = GE_CMD_VERTEXTYPE; i < GE_CMD_BONEMATRIXNUMBER; i++) {
 		if (i != GE_CMD_ORIGIN && i != GE_CMD_OFFSETADDR) {
 			ExecuteOp(gstate.cmdmem[i], 0xFFFFFFFF);
@@ -1130,8 +1143,17 @@ void GPUCommon::ReapplyGfxState() {
 
 	// There are a few here in the middle that we shouldn't execute...
 
+	// 0x42 to 0xEA
 	for (int i = GE_CMD_VIEWPORTXSCALE; i < GE_CMD_TRANSFERSTART; i++) {
-		ExecuteOp(gstate.cmdmem[i], 0xFFFFFFFF);
+		switch (i) {
+		case GE_CMD_LOADCLUT:
+		case GE_CMD_TEXSYNC:
+		case GE_CMD_TEXFLUSH:
+			break;
+		default:
+			ExecuteOp(gstate.cmdmem[i], 0xFFFFFFFF);
+			break;
+		}
 	}
 
 	// Let's just skip the transfer size stuff, it's just values.
@@ -2432,7 +2454,7 @@ void GPUCommon::DoState(PointerWrap &p) {
 			DisplayList_v1 oldDL;
 			p.Do(oldDL);
 			// On 32-bit, they're the same, on 64-bit oldDL is bigger.
-			memcpy(&dls[i], &oldDL, sizeof(DisplayList));
+			memcpy(&dls[i], &oldDL, sizeof(DisplayList_v1));
 			// Fix the other fields.  Let's hope context wasn't important, it was a pointer.
 			dls[i].context = 0;
 			dls[i].offsetAddr = oldDL.offsetAddr;

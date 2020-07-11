@@ -3,8 +3,9 @@
 #include "AndroidVulkanContext.h"
 #include "base/NativeApp.h"
 #include "base/display.h"
-#include "Common/Vulkan/VulkanLoader.h"
 #include "Common/Vulkan/VulkanContext.h"
+#include "Common/Vulkan/VulkanDebug.h"
+#include "Common/Vulkan/VulkanLoader.h"
 #include "thin3d/VulkanRenderManager.h"
 #include "thin3d/thin3d_create.h"
 #include "util/text/parsers.h"
@@ -12,69 +13,7 @@
 #include "Core/ConfigValues.h"
 #include "Core/System.h"
 
-static VulkanLogOptions g_LogOptions;
-
-const char *ObjTypeToString(VkDebugReportObjectTypeEXT type) {
-	switch (type) {
-	case VK_DEBUG_REPORT_OBJECT_TYPE_INSTANCE_EXT: return "Instance";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_PHYSICAL_DEVICE_EXT: return "PhysicalDevice";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT: return "Device";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_QUEUE_EXT: return "Queue";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT: return "CommandBuffer";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_MEMORY_EXT: return "DeviceMemory";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT: return "Buffer";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_VIEW_EXT: return "BufferView";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT: return "Image";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT: return "ImageView";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT: return "ShaderModule";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_EXT: return "Pipeline";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_LAYOUT_EXT: return "PipelineLayout";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_SAMPLER_EXT: return "Sampler";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT: return "DescriptorSet";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT_EXT: return "DescriptorSetLayout";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_POOL_EXT: return "DescriptorPool";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_FENCE_EXT: return "Fence";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_SEMAPHORE_EXT: return "Semaphore";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_EVENT_EXT: return "Event";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_QUERY_POOL_EXT: return "QueryPool";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT: return "Framebuffer";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT: return "RenderPass";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_CACHE_EXT: return "PipelineCache";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_SURFACE_KHR_EXT: return "SurfaceKHR";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_SWAPCHAIN_KHR_EXT: return "SwapChainKHR";
-	case VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_POOL_EXT: return "CommandPool";
-	default: return "Unknown";
-	}
-}
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL Vulkan_Dbg(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject, size_t location, int32_t msgCode, const char* pLayerPrefix, const char* pMsg, void *pUserData) {
-	const VulkanLogOptions *options = (const VulkanLogOptions *)pUserData;
-	int loglevel = ANDROID_LOG_INFO;
-	if (msgFlags & VK_DEBUG_REPORT_ERROR_BIT_EXT) {
-		loglevel = ANDROID_LOG_ERROR;
-	} else if (msgFlags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
-		loglevel = ANDROID_LOG_WARN;
-	} else if (msgFlags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-		loglevel = ANDROID_LOG_WARN;
-	} else if (msgFlags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-		loglevel = ANDROID_LOG_WARN;
-	} else if (msgFlags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-		loglevel = ANDROID_LOG_WARN;
-	}
-
-	__android_log_print(loglevel, APP_NAME, "[%s] %s Code %d : %s",
-						pLayerPrefix, ObjTypeToString(objType), msgCode, pMsg);
-
-	// false indicates that layer should not bail-out of an
-	// API call that had validation failures. This may mean that the
-	// app dies inside the driver due to invalid parameter(s).
-	// That's what would happen without validation layers, so we'll
-	// keep that behavior here.
-	return false;
-}
-
-AndroidVulkanContext::AndroidVulkanContext() {
-}
+AndroidVulkanContext::AndroidVulkanContext() {}
 
 AndroidVulkanContext::~AndroidVulkanContext() {
 	delete g_Vulkan;
@@ -160,11 +99,6 @@ bool AndroidVulkanContext::InitFromRenderThread(ANativeWindow *wnd, int desiredB
 		return false;
 	}
 
-	if (g_validate_) {
-		int bits = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT;
-		g_Vulkan->InitDebugMsgCallback(&Vulkan_Dbg, bits, &g_LogOptions);
-	}
-
 	bool success = true;
 	if (g_Vulkan->InitObjects()) {
 		draw_ = Draw::T3DCreateVulkanContext(g_Vulkan, g_Config.bGfxDebugSplitSubmit);
@@ -184,9 +118,6 @@ bool AndroidVulkanContext::InitFromRenderThread(ANativeWindow *wnd, int desiredB
 	if (!success) {
 		g_Vulkan->DestroyObjects();
 		g_Vulkan->DestroyDevice();
-		g_Vulkan->DestroyDebugUtilsCallback();
-		g_Vulkan->DestroyDebugMsgCallback();
-
 		g_Vulkan->DestroyInstance();
 	}
 	return success;
@@ -206,9 +137,6 @@ void AndroidVulkanContext::ShutdownFromRenderThread() {
 void AndroidVulkanContext::Shutdown() {
 	ILOG("Calling NativeShutdownGraphics");
 	g_Vulkan->DestroyDevice();
-	g_Vulkan->DestroyDebugUtilsCallback();
-	g_Vulkan->DestroyDebugMsgCallback();
-
 	g_Vulkan->DestroyInstance();
 	// We keep the g_Vulkan context around to avoid invalidating a ton of pointers around the app.
 	finalize_glslang();

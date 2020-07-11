@@ -231,6 +231,7 @@ void GPU_Vulkan::CheckGPUFeatures() {
 	features |= GPU_SUPPORTS_INSTANCE_RENDERING;
 	features |= GPU_SUPPORTS_VERTEX_TEXTURE_FETCH;
 	features |= GPU_SUPPORTS_TEXTURE_FLOAT;
+	features |= GPU_PREFER_CPU_DOWNLOAD;
 
 	if (vulkan_->GetDeviceFeatures().enabled.wideLines) {
 		features |= GPU_SUPPORTS_WIDE_LINES;
@@ -291,8 +292,8 @@ void GPU_Vulkan::BeginHostFrame() {
 		if (vulkan_->GetDeviceFeatures().enabled.wideLines) {
 			drawEngine_.SetLineWidth(PSP_CoreParameter().renderWidth / 480.0f);
 		}
+		resized_ = false;
 	}
-	resized_ = false;
 
 	textureCacheVulkan_->StartFrame();
 
@@ -413,9 +414,7 @@ void GPU_Vulkan::BuildReportingInfo() {
 
 void GPU_Vulkan::Reinitialize() {
 	GPUCommon::Reinitialize();
-	textureCacheVulkan_->Clear(true);
 	depalShaderCache_.Clear();
-	framebufferManagerVulkan_->DestroyAllFBOs();
 }
 
 void GPU_Vulkan::InitClear() {
@@ -613,11 +612,11 @@ void GPU_Vulkan::DoState(PointerWrap &p) {
 	// None of these are necessary when saving.
 	// In Freeze-Frame mode, we don't want to do any of this.
 	if (p.mode == p.MODE_READ && !PSP_CoreParameter().frozen) {
-		textureCacheVulkan_->Clear(true);
+		textureCache_->Clear(true);
 		depalShaderCache_.Clear();
 
 		gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
-		framebufferManagerVulkan_->DestroyAllFBOs();
+		framebufferManager_->DestroyAllFBOs();
 	}
 }
 

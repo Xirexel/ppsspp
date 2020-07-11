@@ -230,7 +230,7 @@ GLuint ShaderStageToOpenGL(ShaderStage stage) {
 
 class OpenGLShaderModule : public ShaderModule {
 public:
-	OpenGLShaderModule(GLRenderManager *render, ShaderStage stage) : render_(render), stage_(stage) {
+	OpenGLShaderModule(GLRenderManager *render, ShaderStage stage, const std::string &tag) : render_(render), stage_(stage), tag_(tag) {
 		DLOG("Shader module created (%p)", this);
 		glstage_ = ShaderStageToOpenGL(stage);
 	}
@@ -260,18 +260,19 @@ private:
 	GLRShader *shader_ = nullptr;
 	GLuint glstage_ = 0;
 	std::string source_;  // So we can recompile in case of context loss.
+	std::string tag_;
 };
 
 bool OpenGLShaderModule::Compile(GLRenderManager *render, ShaderLanguage language, const uint8_t *data, size_t dataSize) {
 	source_ = std::string((const char *)data);
-	std::string temp;
 	// Add the prelude on automatically.
 	if (glstage_ == GL_FRAGMENT_SHADER || glstage_ == GL_VERTEX_SHADER) {
-		temp = ApplyGLSLPrelude(source_, glstage_);
-		source_ = temp.c_str();
+		if (source_.find("#version") == source_.npos) {
+			source_ = ApplyGLSLPrelude(source_, glstage_);
+		}
 	}
 
-	shader_ = render->CreateShader(glstage_, source_, "thin3d");
+	shader_ = render->CreateShader(glstage_, source_, tag_);
 	return true;
 }
 
@@ -358,7 +359,7 @@ public:
 	RasterState *CreateRasterState(const RasterStateDesc &desc) override;
 	Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc) override;
 	InputLayout *CreateInputLayout(const InputLayoutDesc &desc) override;
-	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize) override;
+	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const std::string &tag) override;
 
 	Texture *CreateTexture(const TextureDesc &desc) override;
 	Buffer *CreateBuffer(size_t size, uint32_t usageFlags) override;
@@ -369,12 +370,12 @@ public:
 
 	void UpdateBuffer(Buffer *buffer, const uint8_t *data, size_t offset, size_t size, UpdateBufferFlags flags) override;
 
-	void CopyFramebufferImage(Framebuffer *src, int level, int x, int y, int z, Framebuffer *dst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits) override;
-	bool BlitFramebuffer(Framebuffer *src, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dst, int dstX1, int dstY1, int dstX2, int dstY2, int channelBits, FBBlitFilter filter) override;
-	bool CopyFramebufferToMemorySync(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat format, void *pixels, int pixelStride) override;
+	void CopyFramebufferImage(Framebuffer *src, int level, int x, int y, int z, Framebuffer *dst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits, const char *tag) override;
+	bool BlitFramebuffer(Framebuffer *src, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dst, int dstX1, int dstY1, int dstX2, int dstY2, int channelBits, FBBlitFilter filter, const char *tag) override;
+	bool CopyFramebufferToMemorySync(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat format, void *pixels, int pixelStride, const char *tag) override;
 
 	// These functions should be self explanatory.
-	void BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp) override;
+	void BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) override;
 	// color must be 0, for now.
 	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int attachment) override;
 
@@ -466,16 +467,20 @@ public:
 		}
 	}
 
-	uintptr_t GetNativeObject(NativeObject obj) override {
+	uint64_t GetNativeObject(NativeObject obj) override {
 		switch (obj) {
 		case NativeObject::RENDER_MANAGER:
-			return (uintptr_t)&renderManager_;
+			return (uint64_t)(uintptr_t)&renderManager_;
 		default:
 			return 0;
 		}
 	}
 
 	void HandleEvent(Event ev, int width, int height, void *param1, void *param2) override {}
+
+	int GetCurrentStepId() const override {
+		return renderManager_.GetCurrentStepId();
+	}
 
 private:
 	void ApplySamplers();
@@ -654,7 +659,7 @@ public:
 	}
 
 private:
-	void SetImageData(int x, int y, int z, int width, int height, int depth, int level, int stride, const uint8_t *data);
+	void SetImageData(int x, int y, int z, int width, int height, int depth, int level, int stride, const uint8_t *data, TextureCallback callback);
 
 	GLRenderManager *render_;
 	GLRTexture *tex_;
@@ -679,14 +684,15 @@ OpenGLTexture::OpenGLTexture(GLRenderManager *render, const TextureDesc &desc) :
 
 	canWrap_ = isPowerOf2(width_) && isPowerOf2(height_);
 	mipLevels_ = desc.mipLevels;
-	if (!desc.initData.size())
+	if (desc.initData.empty())
 		return;
 
 	int level = 0;
 	for (auto data : desc.initData) {
-		SetImageData(0, 0, 0, width_, height_, depth_, level, 0, data);
+		SetImageData(0, 0, 0, width_, height_, depth_, level, 0, data, desc.initDataCallback);
 		width_ = (width_ + 1) / 2;
 		height_ = (height_ + 1) / 2;
+		depth_ = (depth_ + 1) / 2;
 		level++;
 	}
 	mipLevels_ = desc.generateMips ? desc.mipLevels : level;
@@ -698,7 +704,6 @@ OpenGLTexture::OpenGLTexture(GLRenderManager *render, const TextureDesc &desc) :
 		generatedMips_ = true;
 	}
 	render->FinalizeTexture(tex_, mipLevels_, genMips);
-
 }
 
 OpenGLTexture::~OpenGLTexture() {
@@ -731,8 +736,8 @@ void MoveABit(u16 *dest, const u16 *src, size_t count) {
 	}
 }
 
-void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int depth, int level, int stride, const uint8_t *data) {
-	if (width != width_ || height != height_ || depth != depth_) {
+void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int depth, int level, int stride, const uint8_t *data, TextureCallback callback) {
+	if ((width != width_ || height != height_ || depth != depth_) && level == 0) {
 		// When switching to texStorage we need to handle this correctly.
 		width_ = width;
 		height_ = height;
@@ -744,19 +749,31 @@ void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int
 
 	size_t alignment = DataFormatSizeInBytes(format_);
 	// Make a copy of data with stride eliminated.
-	uint8_t *texData = new uint8_t[(size_t)(width * height * alignment)];
+	uint8_t *texData = new uint8_t[(size_t)(width * height * depth * alignment)];
 
-	// Emulate support for DataFormat::A1R5G5B5_UNORM_PACK16.
-	if (format_ == DataFormat::A1R5G5B5_UNORM_PACK16) {
-		format_ = DataFormat::R5G5B5A1_UNORM_PACK16;
-		for (int y = 0; y < height; y++) {
-			MoveABit((u16 *)(texData + y * width * alignment), (const u16 *)(data + y * stride * alignment), width);
+	bool texDataPopulated = false;
+	if (callback) {
+		texDataPopulated = callback(texData, data, width, height, depth, width * (int)alignment, height * width * (int)alignment);
+	}
+	if (texDataPopulated) {
+		if (format_ == DataFormat::A1R5G5B5_UNORM_PACK16) {
+			format_ = DataFormat::R5G5B5A1_UNORM_PACK16;
+			MoveABit((u16 *)texData, (const u16 *)texData, width * height * depth);
 		}
 	} else {
-		for (int y = 0; y < height; y++) {
-			memcpy(texData + y * width * alignment, data + y * stride * alignment, width * alignment);
+		// Emulate support for DataFormat::A1R5G5B5_UNORM_PACK16.
+		if (format_ == DataFormat::A1R5G5B5_UNORM_PACK16) {
+			format_ = DataFormat::R5G5B5A1_UNORM_PACK16;
+			for (int y = 0; y < height; y++) {
+				MoveABit((u16 *)(texData + y * width * alignment), (const u16 *)(data + y * stride * alignment), width);
+			}
+		} else {
+			for (int y = 0; y < height; y++) {
+				memcpy(texData + y * width * alignment, data + y * stride * alignment, width * alignment);
+			}
 		}
 	}
+
 	render_->TextureImage(tex_, level, width, height, format_, texData);
 }
 
@@ -796,7 +813,7 @@ static void LogReadPixelsError(GLenum error) {
 }
 #endif
 
-bool OpenGLContext::CopyFramebufferToMemorySync(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat dataFormat, void *pixels, int pixelStride) {
+bool OpenGLContext::CopyFramebufferToMemorySync(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat dataFormat, void *pixels, int pixelStride, const char *tag) {
 	if (gl_extensions.IsGLES && (channelBits & FB_COLOR_BIT) == 0) {
 		// Can't readback depth or stencil on GLES.
 		return false;
@@ -809,7 +826,7 @@ bool OpenGLContext::CopyFramebufferToMemorySync(Framebuffer *src, int channelBit
 		aspect |= GL_DEPTH_BUFFER_BIT;
 	if (channelBits & FB_STENCIL_BIT)
 		aspect |= GL_STENCIL_BUFFER_BIT;
-	renderManager_.CopyFramebufferToMemorySync(fb ? fb->framebuffer : nullptr, aspect, x, y, w, h, dataFormat, (uint8_t *)pixels, pixelStride);
+	renderManager_.CopyFramebufferToMemorySync(fb ? fb->framebuffer : nullptr, aspect, x, y, w, h, dataFormat, (uint8_t *)pixels, pixelStride, tag);
 	return true;
 }
 
@@ -1006,8 +1023,8 @@ void OpenGLContext::ApplySamplers() {
 	}
 }
 
-ShaderModule *OpenGLContext::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize) {
-	OpenGLShaderModule *shader = new OpenGLShaderModule(&renderManager_, stage);
+ShaderModule *OpenGLContext::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const std::string &tag) {
+	OpenGLShaderModule *shader = new OpenGLShaderModule(&renderManager_, stage, tag);
 	if (shader->Compile(&renderManager_, language, data, dataSize)) {
 		return shader;
 	} else {
@@ -1029,6 +1046,9 @@ bool OpenGLPipeline::LinkShaders() {
 	semantics.push_back({ SEM_NORMAL, "Normal" });
 	semantics.push_back({ SEM_TANGENT, "Tangent" });
 	semantics.push_back({ SEM_BINORMAL, "Binormal" });
+	// For postshaders.
+	semantics.push_back({ SEM_POSITION, "a_position" });
+	semantics.push_back({ SEM_TEXCOORD0, "a_texcoord0" });
 	std::vector<GLRProgram::UniformLocQuery> queries;
 	std::vector<GLRProgram::Initializer> initialize;
 	program_ = render_->CreateProgram(linkShaders, semantics, queries, initialize, false);
@@ -1037,10 +1057,12 @@ bool OpenGLPipeline::LinkShaders() {
 
 void OpenGLContext::BindPipeline(Pipeline *pipeline) {
 	curPipeline_ = (OpenGLPipeline *)pipeline;
-	curPipeline_->blend->Apply(&renderManager_);
-	curPipeline_->depthStencil->Apply(&renderManager_, stencilRef_);
-	curPipeline_->raster->Apply(&renderManager_);
-	renderManager_.BindProgram(curPipeline_->program_);
+	if (curPipeline_) {
+		curPipeline_->blend->Apply(&renderManager_);
+		curPipeline_->depthStencil->Apply(&renderManager_, stencilRef_);
+		curPipeline_->raster->Apply(&renderManager_);
+		renderManager_.BindProgram(curPipeline_->program_);
+	}
 }
 
 void OpenGLContext::UpdateDynamicUniformBuffer(const void *ub, size_t size) {
@@ -1051,8 +1073,11 @@ void OpenGLContext::UpdateDynamicUniformBuffer(const void *ub, size_t size) {
 	for (auto &uniform : curPipeline_->dynamicUniforms.uniforms) {
 		const float *data = (const float *)((uint8_t *)ub + uniform.offset);
 		switch (uniform.type) {
+		case UniformType::FLOAT1:
+		case UniformType::FLOAT2:
+		case UniformType::FLOAT3:
 		case UniformType::FLOAT4:
-			renderManager_.SetUniformF(uniform.name, 4, data);
+			renderManager_.SetUniformF(uniform.name, 1 + (int)uniform.type - (int)UniformType::FLOAT1, data);
 			break;
 		case UniformType::MATRIX4X4:
 			renderManager_.SetUniformM4x4(uniform.name, data);
@@ -1074,7 +1099,7 @@ void OpenGLContext::DrawIndexed(int vertexCount, int offset) {
 	ApplySamplers();
 	renderManager_.BindVertexBuffer(curPipeline_->inputLayout->inputLayout_, curVBuffers_[0]->buffer_, curVBufferOffsets_[0]);
 	renderManager_.BindIndexBuffer(curIBuffer_->buffer_);
-	renderManager_.DrawIndexed(curPipeline_->prim, vertexCount, GL_UNSIGNED_INT, (void *)(intptr_t)curIBufferOffset_);
+	renderManager_.DrawIndexed(curPipeline_->prim, vertexCount, GL_UNSIGNED_SHORT, (void *)((intptr_t)curIBufferOffset_ + offset * sizeof(uint32_t)));
 }
 
 void OpenGLContext::DrawUP(const void *vdata, int vertexCount) {
@@ -1167,16 +1192,16 @@ Framebuffer *OpenGLContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	return fbo;
 }
 
-void OpenGLContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp) {
+void OpenGLContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) {
 	OpenGLFramebuffer *fb = (OpenGLFramebuffer *)fbo;
 	GLRRenderPassAction color = (GLRRenderPassAction)rp.color;
 	GLRRenderPassAction depth = (GLRRenderPassAction)rp.depth;
 	GLRRenderPassAction stencil = (GLRRenderPassAction)rp.stencil;
 
-	renderManager_.BindFramebufferAsRenderTarget(fb ? fb->framebuffer : nullptr, color, depth, stencil, rp.clearColor, rp.clearDepth, rp.clearStencil);
+	renderManager_.BindFramebufferAsRenderTarget(fb ? fb->framebuffer : nullptr, color, depth, stencil, rp.clearColor, rp.clearDepth, rp.clearStencil, tag);
 }
 
-void OpenGLContext::CopyFramebufferImage(Framebuffer *fbsrc, int srcLevel, int srcX, int srcY, int srcZ, Framebuffer *fbdst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits) {
+void OpenGLContext::CopyFramebufferImage(Framebuffer *fbsrc, int srcLevel, int srcX, int srcY, int srcZ, Framebuffer *fbdst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits, const char *tag) {
 	OpenGLFramebuffer *src = (OpenGLFramebuffer *)fbsrc;
 	OpenGLFramebuffer *dst = (OpenGLFramebuffer *)fbdst;
 
@@ -1189,10 +1214,10 @@ void OpenGLContext::CopyFramebufferImage(Framebuffer *fbsrc, int srcLevel, int s
 		if (channelBits & FB_STENCIL_BIT)
 			aspect |= GL_STENCIL_BUFFER_BIT;
 	}
-	renderManager_.CopyFramebuffer(src->framebuffer, GLRect2D{ srcX, srcY, width, height }, dst->framebuffer, GLOffset2D{ dstX, dstY }, aspect);
+	renderManager_.CopyFramebuffer(src->framebuffer, GLRect2D{ srcX, srcY, width, height }, dst->framebuffer, GLOffset2D{ dstX, dstY }, aspect, tag);
 }
 
-bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *fbdst, int dstX1, int dstY1, int dstX2, int dstY2, int channels, FBBlitFilter linearFilter) {
+bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *fbdst, int dstX1, int dstY1, int dstX2, int dstY2, int channels, FBBlitFilter linearFilter, const char *tag) {
 	OpenGLFramebuffer *src = (OpenGLFramebuffer *)fbsrc;
 	OpenGLFramebuffer *dst = (OpenGLFramebuffer *)fbdst;
 	GLuint aspect = 0;
@@ -1203,7 +1228,7 @@ bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, in
 	if (channels & FB_STENCIL_BIT)
 		aspect |= GL_STENCIL_BUFFER_BIT;
 
-	renderManager_.BlitFramebuffer(src->framebuffer, GLRect2D{ srcX1, srcY1, srcX2 - srcX1, srcY2 - srcY1 }, dst->framebuffer, GLRect2D{ dstX1, dstY1, dstX2 - dstX1, dstY2 - dstY1 }, aspect, linearFilter == FB_BLIT_LINEAR);
+	renderManager_.BlitFramebuffer(src->framebuffer, GLRect2D{ srcX1, srcY1, srcX2 - srcX1, srcY2 - srcY1 }, dst->framebuffer, GLRect2D{ dstX1, dstY1, dstX2 - dstX1, dstY2 - dstY1 }, aspect, linearFilter == FB_BLIT_LINEAR, tag);
 	return true;
 }
 

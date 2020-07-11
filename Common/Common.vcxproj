@@ -152,10 +152,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -180,10 +176,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
@@ -208,10 +200,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
@@ -236,10 +224,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -269,10 +253,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -304,10 +284,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
@@ -339,10 +315,6 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
     <ClCompile>
@@ -374,19 +346,12 @@
     <Lib>
       <AdditionalLibraryDirectories>Winmm.lib</AdditionalLibraryDirectories>
     </Lib>
-    <PreBuildEvent>
-      <Message>Updating git-version.cpp</Message>
-      <Command>../Windows/git-version-gen.cmd</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="ABI.h" />
     <ClInclude Include="Arm64Emitter.h" />
     <ClInclude Include="ArmCommon.h" />
     <ClInclude Include="ArmEmitter.h" />
-    <ClInclude Include="Atomics.h" />
-    <ClInclude Include="Atomic_GCC.h" />
-    <ClInclude Include="Atomic_Win32.h" />
     <ClInclude Include="BitScan.h" />
     <ClInclude Include="BitSet.h" />
     <ClInclude Include="ColorConvNEON.h" />

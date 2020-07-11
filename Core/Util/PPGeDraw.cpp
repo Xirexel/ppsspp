@@ -125,7 +125,7 @@ struct PPGeTextDrawerImage {
 std::map<PPGeTextDrawerCacheKey, PPGeTextDrawerImage> textDrawerImages;
 
 // Overwrite the current text lines buffer so it can be drawn later.
-void PPGePrepareText(const char *text, float x, float y, int align, float scale, float lineHeightScale,
+void PPGePrepareText(const char *text, float x, float y, PPGeAlign align, float scale, float lineHeightScale,
 	int WrapType = PPGE_LINE_NONE, int wrapWidth = 0);
 
 // These functions must be called between PPGeBegin and PPGeEnd.
@@ -162,18 +162,18 @@ static void BeginVertexData() {
 	vertexStart = dataWritePtr;
 }
 
-static void Vertex(float x, float y, float u, float v, int tw, int th, u32 color = 0xFFFFFFFF, float off = -0.5f) {
+static void Vertex(float x, float y, float u, float v, int tw, int th, u32 color = 0xFFFFFFFF) {
 	if (g_RemasterMode) {
 		PPGeRemasterVertex vtx;
-		vtx.x = x + off; vtx.y = y + off; vtx.z = 0;
-		vtx.u = u * tw + off; vtx.v = v * th + off;
+		vtx.x = x; vtx.y = y; vtx.z = 0;
+		vtx.u = u * tw; vtx.v = v * th;
 		vtx.color = color;
 		Memory::WriteStruct(dataWritePtr, &vtx);
 		dataWritePtr += sizeof(vtx);
 	} else {
 		PPGeVertex vtx;
-		vtx.x = x + off; vtx.y = y + off; vtx.z = 0;
-		vtx.u = u * tw + off; vtx.v = v * th + off;
+		vtx.x = x; vtx.y = y; vtx.z = 0;
+		vtx.u = u * tw; vtx.v = v * th;
 		vtx.color = color;
 		Memory::WriteStruct(dataWritePtr, &vtx);
 		dataWritePtr += sizeof(vtx);
@@ -225,9 +225,8 @@ void __PPGeInit() {
 
 	if (loadedZIM) {
 		size_t atlas_data_size;
-		uint8_t *atlas_data;
 		if (!g_ppge_atlas.IsMetadataLoaded()) {
-			atlas_data = VFSReadFile("ppge_atlas.meta", &atlas_data_size);
+			uint8_t *atlas_data = VFSReadFile("ppge_atlas.meta", &atlas_data_size);
 			if (atlas_data)
 				g_ppge_atlas.Load(atlas_data, atlas_data_size);
 			delete[] atlas_data;
@@ -262,7 +261,7 @@ void __PPGeInit() {
 		u8 cval = (a2 << 4) | a1;
 		ramPtr[i] = cval;
 	}
-	
+
 	free(imageData[0]);
 
 	// We can't create it here, because Android needs it on the right thread.
@@ -271,7 +270,7 @@ void __PPGeInit() {
 	textDrawer = nullptr;
 	textDrawerImages.clear();
 
-	DEBUG_LOG(SCEGE, "PPGe drawing library initialized. DL: %08x Data: %08x Atlas: %08x (%i) Args: %08x",
+	INFO_LOG(SCEGE, "PPGe drawing library initialized. DL: %08x Data: %08x Atlas: %08x (%i) Args: %08x",
 		dlPtr, dataPtr, atlasPtr, atlasSize, listArgs.ptr);
 }
 
@@ -455,7 +454,7 @@ static const AtlasChar *PPGeGetChar(const AtlasFont &atlasfont, unsigned int cva
 
 // Break a single text string into mutiple lines.
 static AtlasTextMetrics BreakLines(const char *text, const AtlasFont &atlasfont, float x, float y, 
-									int align, float scale, float lineHeightScale, int wrapType, float wrapWidth, bool dryRun)
+									PPGeAlign align, float scale, float lineHeightScale, int wrapType, float wrapWidth, bool dryRun)
 {
 	y += atlasfont.ascend * scale;
 	float sx = x, sy = y;
@@ -665,26 +664,22 @@ static AtlasTextMetrics BreakLines(const char *text, const AtlasFont &atlasfont,
 
 	const float w = maxw;
 	const float h = (float)numLines * lineHeight;
-	if (align)
-	{
-		if (!dryRun)
-		{
-			for (auto i = char_lines.begin(); i != char_lines.end(); ++i)
-			{
-				for (auto j = i->begin(); j != i->end(); ++j)
-				{
-					if (align & PPGE_ALIGN_HCENTER) j->x -= w / 2.0f;
-					else if (align & PPGE_ALIGN_RIGHT) j->x -= w;
+	if (align & PPGeAlign::ANY) {
+		if (!dryRun) {
+			for (auto i = char_lines.begin(); i != char_lines.end(); ++i) {
+				for (auto j = i->begin(); j != i->end(); ++j) {
+					if (align & PPGeAlign::BOX_HCENTER) j->x -= w / 2.0f;
+					else if (align & PPGeAlign::BOX_RIGHT) j->x -= w;
 
-					if (align & PPGE_ALIGN_VCENTER) j->y -= h / 2.0f;
-					else if (align & PPGE_ALIGN_BOTTOM) j->y -= h;
+					if (align & PPGeAlign::BOX_VCENTER) j->y -= h / 2.0f;
+					else if (align & PPGeAlign::BOX_BOTTOM) j->y -= h;
 				}
 			}
 		}
-		if (align & PPGE_ALIGN_HCENTER) sx -= w / 2.0f;
-		else if (align & PPGE_ALIGN_RIGHT) sx -= w;
-		if (align & PPGE_ALIGN_VCENTER) sy -= h / 2.0f;
-		else if (align & PPGE_ALIGN_BOTTOM) sy -= h;
+		if (align & PPGeAlign::BOX_HCENTER) sx -= w / 2.0f;
+		else if (align & PPGeAlign::BOX_RIGHT) sx -= w;
+		if (align & PPGeAlign::BOX_VCENTER) sy -= h / 2.0f;
+		else if (align & PPGeAlign::BOX_BOTTOM) sy -= h;
 	}
 
 	AtlasTextMetrics metrics = { sx, sy, w, lineHeight, scale, numLines };
@@ -734,12 +729,12 @@ void PPGeMeasureText(float *w, float *h, const char *text, float scale, int Wrap
 	}
 
 	const AtlasFont &atlasfont = g_ppge_atlas.fonts[0];
-	AtlasTextMetrics metrics = BreakLines(text, atlasfont, 0, 0, 0, scale, scale, WrapType, wrapWidth, true);
+	AtlasTextMetrics metrics = BreakLines(text, atlasfont, 0, 0, PPGeAlign::BOX_TOP, scale, scale, WrapType, wrapWidth, true);
 	if (w) *w = metrics.maxWidth;
 	if (h) *h = metrics.lineHeight * metrics.numLines;
 }
 
-void PPGePrepareText(const char *text, float x, float y, int align, float scale, float lineHeightScale, int WrapType, int wrapWidth)
+void PPGePrepareText(const char *text, float x, float y, PPGeAlign align, float scale, float lineHeightScale, int WrapType, int wrapWidth)
 {
 	const AtlasFont &atlasfont = g_ppge_atlas.fonts[0];
 	if (!g_ppge_atlas.IsMetadataLoaded() || g_ppge_atlas.num_fonts < 1) {
@@ -794,15 +789,15 @@ int GetPow2(int x) {
 	return ret;
 }
 
-static PPGeTextDrawerImage PPGeGetTextImage(const char *text, int align, float scale, float maxWidth, bool wrap) {
-	int tdalign = (align & PPGE_ALIGN_HCENTER) ? ALIGN_HCENTER : 0;
+static PPGeTextDrawerImage PPGeGetTextImage(const char *text, PPGeAlign align, float scale, float maxWidth, bool wrap) {
+	int tdalign = 0;
 	tdalign |= FLAG_ELLIPSIZE_TEXT;
 	if (wrap) {
 		tdalign |= FLAG_WRAP_TEXT;
 	}
 
 	PPGeTextDrawerCacheKey key{ text, tdalign, maxWidth / scale };
-	PPGeTextDrawerImage im;
+	PPGeTextDrawerImage im{};
 
 	auto cacheItem = textDrawerImages.find(key);
 	if (cacheItem != textDrawerImages.end()) {
@@ -847,7 +842,11 @@ static PPGeTextDrawerImage PPGeGetTextImage(const char *text, int align, float s
 	return im;
 }
 
-static void PPGeDrawTextImage(PPGeTextDrawerImage im, float x, float y, int align, float scale, u32 color) {
+static void PPGeDrawTextImage(PPGeTextDrawerImage im, float x, float y, PPGeAlign align, float scale, u32 color) {
+	if (!im.ptr) {
+		return;
+	}
+
 	int bufw = ((im.entry.bmWidth + 31) / 32) * 32;
 	int wp2 = GetPow2(im.entry.bmWidth);
 	int hp2 = GetPow2(im.entry.bmHeight);
@@ -859,26 +858,30 @@ static void PPGeDrawTextImage(PPGeTextDrawerImage im, float x, float y, int alig
 	float w = im.entry.width * scale;
 	float h = im.entry.height * scale;
 
-	if (align & PPGE_ALIGN_HCENTER)
+	if (align & PPGeAlign::BOX_HCENTER)
 		x -= w / 2.0f;
-	else if (align & PPGE_ALIGN_RIGHT)
+	else if (align & PPGeAlign::BOX_RIGHT)
 		x -= w;
-	if (align & PPGE_ALIGN_VCENTER)
+	if (align & PPGeAlign::BOX_VCENTER)
 		y -= h / 2.0f;
-	else if (align & PPGE_ALIGN_BOTTOM)
+	else if (align & PPGeAlign::BOX_BOTTOM)
 		y -= h;
 
 	BeginVertexData();
 	float u1 = (float)im.entry.width / (1 << wp2);
 	float v1 = (float)im.entry.height / (1 << hp2);
-	Vertex(x, y, 0, 0, 1 << wp2, 1 << hp2, color, 0.0f);
-	Vertex(x + w, y + h, u1, v1, 1 << wp2, 1 << hp2, color, 0.0f);
+	Vertex(x, y, 0, 0, 1 << wp2, 1 << hp2, color);
+	Vertex(x + w, y + h, u1, v1, 1 << wp2, 1 << hp2, color);
 	EndVertexDataAndDraw(GE_PRIM_RECTANGLES);
 
 	PPGeSetDefaultTexture();
 }
 
-void PPGeDrawText(const char *text, float x, float y, int align, float scale, u32 color) {
+void PPGeDrawText(const char *text, float x, float y, PPGeAlign align, float scale, u32 color) {
+	if (!text || !strlen(text)) {
+		return;
+	}
+
 	if (HasTextDrawer()) {
 		PPGeTextDrawerImage im = PPGeGetTextImage(text, align, scale, 480.0f - x, false);
 		PPGeDrawTextImage(im, x, y, align, scale, color);
@@ -912,7 +915,7 @@ static std::string CropLinesToCount(const std::string &s, int numLines) {
 	return s.substr(0, len);
 }
 
-void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, float wrapHeight, int align, float scale, u32 color) {
+void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, float wrapHeight, PPGeAlign align, float scale, u32 color) {
 	std::string s = text;
 	if (wrapHeight != 0.0f) {
 		s = StripTrailingWhite(s);
@@ -924,7 +927,7 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 	if (HasTextDrawer()) {
 		float actualWidth, actualHeight;
 		Bounds b(0, 0, wrapWidth <= 0 ? 480.0f - x : wrapWidth, wrapHeight);
-		int tdalign = (align & PPGE_ALIGN_HCENTER) ? ALIGN_HCENTER : 0;
+		int tdalign = 0;
 		textDrawer->SetFontScale(scale, scale);
 		textDrawer->MeasureStringRect(s.c_str(), s.size(), b, &actualWidth, &actualHeight, tdalign | FLAG_WRAP_TEXT);
 		if (wrapHeight != 0.0f && actualHeight > wrapHeight) {

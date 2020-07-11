@@ -7,7 +7,8 @@
 
 #include "base/basictypes.h"
 #include "base/display.h"
-#include "VulkanContext.h"
+#include "Common/Vulkan/VulkanContext.h"
+#include "Common/Vulkan/VulkanDebug.h"
 #include "GPU/Common/ShaderCommon.h"
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
@@ -35,16 +36,10 @@
 #define new DBG_NEW
 #endif
 
+VulkanLogOptions g_LogOptions;
+
 static const char *validationLayers[] = {
-	"VK_LAYER_LUNARG_standard_validation",
-	/*
-	"VK_LAYER_GOOGLE_threading",
-	"VK_LAYER_LUNARG_draw_state",
-	"VK_LAYER_LUNARG_image",
-	"VK_LAYER_LUNARG_mem_tracker",
-	"VK_LAYER_LUNARG_object_tracker",
-	"VK_LAYER_LUNARG_param_checker",
-	*/
+	"VK_LAYER_KHRONOS_validation",
 	/*
 	// For layers included in the Android NDK.
 	"VK_LAYER_GOOGLE_threading",
@@ -92,6 +87,9 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 		init_error_ = "Vulkan not loaded - can't create instance";
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
+
+	instance_layer_names_.clear();
+	device_layer_names_.clear();
 
 	// We can get the list of layers and extensions without an instance so we can use this information
 	// to enable the extensions we need that are available.
@@ -141,13 +139,7 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 			}
 			instance_extensions_enabled_.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 			extensionsLookup_.EXT_debug_utils = true;
-		} else if (IsInstanceExtensionAvailable(VK_EXT_DEBUG_REPORT_EXTENSION_NAME)) {
-			for (size_t i = 0; i < ARRAY_SIZE(validationLayers); i++) {
-				instance_layer_names_.push_back(validationLayers[i]);
-				device_layer_names_.push_back(validationLayers[i]);
-			}
-			instance_extensions_enabled_.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-			extensionsLookup_.EXT_debug_report = true;
+			ILOG("Vulkan debug_utils validation enabled.");
 		} else {
 			ELOG("Validation layer extension not available - not enabling Vulkan validation.");
 			flags_ &= ~VULKAN_FLAG_VALIDATE;
@@ -188,7 +180,7 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 #endif
 	if (res != VK_SUCCESS) {
 		if (res == VK_ERROR_LAYER_NOT_PRESENT) {
-			WLOG("Validation on but layers not available - dropping layers");
+			WLOG("Validation on but instance layer not available - dropping layers");
 			// Drop the validation layers and try again.
 			instance_layer_names_.clear();
 			device_layer_names_.clear();
@@ -258,6 +250,11 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 			vkGetPhysicalDeviceProperties(physical_devices_[i], &physicalDeviceProperties_[i].properties);
 		}
 	}
+
+	if (extensionsLookup_.EXT_debug_utils) {
+		InitDebugUtilsCallback();
+	}
+
 	return VK_SUCCESS;
 }
 
@@ -266,6 +263,13 @@ VulkanContext::~VulkanContext() {
 }
 
 void VulkanContext::DestroyInstance() {
+	if (extensionsLookup_.EXT_debug_utils) {
+		while (utils_callbacks.size() > 0) {
+			vkDestroyDebugUtilsMessengerEXT(instance_, utils_callbacks.back(), nullptr);
+			utils_callbacks.pop_back();
+		}
+	}
+
 	vkDestroyInstance(instance_, nullptr);
 	VulkanFree();
 	instance_ = VK_NULL_HANDLE;
@@ -674,47 +678,18 @@ VkResult VulkanContext::CreateDevice() {
 	return res;
 }
 
-VkResult VulkanContext::InitDebugMsgCallback(PFN_vkDebugReportCallbackEXT dbgFunc, int bits, void *userdata) {
-	VkDebugReportCallbackEXT msg_callback;
+VkResult VulkanContext::InitDebugUtilsCallback() {
+	// We're intentionally skipping VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT and
+	// VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT, just too spammy.
+	int bits = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+		| VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+		| VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 
-	if (!(flags_ & VULKAN_FLAG_VALIDATE)) {
-		WLOG("Not registering debug report callback - extension not enabled!");
-		return VK_SUCCESS;
-	}
-	ILOG("Registering debug report callback");
-
-	VkDebugReportCallbackCreateInfoEXT cb{VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT};
-	cb.flags = bits;
-	cb.pfnCallback = dbgFunc;
-	cb.pUserData = userdata;
-	VkResult res = vkCreateDebugReportCallbackEXT(instance_, &cb, nullptr, &msg_callback);
-	switch (res) {
-	case VK_SUCCESS:
-		msg_callbacks.push_back(msg_callback);
-		break;
-	case VK_ERROR_OUT_OF_HOST_MEMORY:
-		return VK_ERROR_INITIALIZATION_FAILED;
-	default:
-		return VK_ERROR_INITIALIZATION_FAILED;
-	}
-	return res;
-}
-
-void VulkanContext::DestroyDebugMsgCallback() {
-	if (!extensionsLookup_.EXT_debug_report)
-		return;
-	while (msg_callbacks.size() > 0) {
-		vkDestroyDebugReportCallbackEXT(instance_, msg_callbacks.back(), nullptr);
-		msg_callbacks.pop_back();
-	}
-}
-
-VkResult VulkanContext::InitDebugUtilsCallback(PFN_vkDebugUtilsMessengerCallbackEXT callback, int bits, void *userdata) {
 	VkDebugUtilsMessengerCreateInfoEXT callback1{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
 	callback1.messageSeverity = bits;
 	callback1.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-	callback1.pfnUserCallback = callback;
-	callback1.pUserData = userdata;
+	callback1.pfnUserCallback = &VulkanDebugUtilsCallback;
+	callback1.pUserData = (void *)&g_LogOptions;
 	VkDebugUtilsMessengerEXT messenger;
 	VkResult res = vkCreateDebugUtilsMessengerEXT(instance_, &callback1, nullptr, &messenger);
 	if (res != VK_SUCCESS) {
@@ -726,16 +701,6 @@ VkResult VulkanContext::InitDebugUtilsCallback(PFN_vkDebugUtilsMessengerCallback
 	}
 	return res;
 }
-
-void VulkanContext::DestroyDebugUtilsCallback() {
-	if (!extensionsLookup_.EXT_debug_utils)
-		return;
-	while (utils_callbacks.size() > 0) {
-		vkDestroyDebugUtilsMessengerEXT(instance_, utils_callbacks.back(), nullptr);
-		utils_callbacks.pop_back();
-	}
-}
-
 
 VkResult VulkanContext::InitSurface(WindowSystem winsys, void *data1, void *data2) {
 	winsys_ = winsys;

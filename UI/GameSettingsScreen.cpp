@@ -161,6 +161,7 @@ void GameSettingsScreen::CreateViews() {
 	auto ms = GetI18NCategory("MainSettings");
 	auto dev = GetI18NCategory("Developer");
 	auto ri = GetI18NCategory("RemoteISO");
+	auto ps = GetI18NCategory("PostShaders");
 
 	root_ = new AnchorLayout(new LayoutParams(FILL_PARENT, FILL_PARENT));
 
@@ -283,14 +284,21 @@ void GameSettingsScreen::CreateViews() {
 	altSpeed2->SetNegativeDisable(gr->T("Disabled"));
 
 	graphicsSettings->Add(new ItemHeader(gr->T("Features")));
-	// Hide postprocess option on unsupported backends to avoid confusion.
-	if (GetGPUBackend() != GPUBackend::DIRECT3D9) {
-		auto ps = GetI18NCategory("PostShaders");
-		postProcChoice_ = graphicsSettings->Add(new ChoiceWithValueDisplay(&g_Config.sPostShaderName, gr->T("Postprocessing Shader"), &PostShaderTranslateName));
-		postProcChoice_->OnClick.Handle(this, &GameSettingsScreen::OnPostProcShader);
-		postProcChoice_->SetEnabledFunc([] {
-			return !g_Config.bSoftwareRendering && g_Config.iRenderingMode != FB_NON_BUFFERED_MODE;
-		});
+	postProcChoice_ = graphicsSettings->Add(new ChoiceWithValueDisplay(&g_Config.sPostShaderName, gr->T("Postprocessing Shader"), &PostShaderTranslateName));
+	postProcChoice_->OnClick.Handle(this, &GameSettingsScreen::OnPostProcShader);
+	postProcChoice_->SetEnabledFunc([] {
+		return g_Config.iRenderingMode != FB_NON_BUFFERED_MODE;
+	});
+
+	auto shaderChain = GetPostShaderChain(g_Config.sPostShaderName);
+	for (auto shaderInfo : shaderChain) {
+		for (size_t i = 0; i < ARRAY_SIZE(shaderInfo->settings); ++i) {
+			auto &setting = shaderInfo->settings[i];
+			if (!setting.name.empty()) {
+				auto &value = g_Config.mPostShaderSetting[StringFromFormat("%sSettingValue%d", shaderInfo->section.c_str(), i + 1)];
+				graphicsSettings->Add(new PopupSliderChoiceFloat(&value, setting.minValue, setting.maxValue, ps->T(setting.name), setting.step, screenManager()));
+			}
+		}
 	}
 
 #if !defined(MOBILE_DEVICE)
@@ -305,7 +313,16 @@ void GameSettingsScreen::CreateViews() {
 	displayEditor_ = graphicsSettings->Add(new Choice(gr->T("Display layout editor")));
 	displayEditor_->OnClick.Handle(this, &GameSettingsScreen::OnDisplayLayoutEditor);
 
-#ifdef __ANDROID__
+#if PPSSPP_PLATFORM(ANDROID)
+	// Hide insets option if no insets, or OS too old.
+	if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 29 &&
+		(System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_LEFT) != 0.0f ||
+		 System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_TOP) != 0.0f ||
+		 System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_RIGHT) != 0.0f ||
+		 System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_BOTTOM) != 0.0f)) {
+		graphicsSettings->Add(new CheckBox(&g_Config.bIgnoreScreenInsets, gr->T("Ignore camera notch when centering")));
+	}
+
 	// Hide Immersive Mode on pre-kitkat Android
 	if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 19) {
 		// Let's reuse the Fullscreen translation string from desktop.
@@ -347,6 +364,9 @@ void GameSettingsScreen::CreateViews() {
 	frameDuplication->OnClick.Add([=](EventParams &e) {
 		settingInfo_->Show(gr->T("RenderDuplicateFrames Tip", "Can make framerate smoother in games that run at lower framerates"), e.v);
 		return UI::EVENT_CONTINUE;
+	});
+	frameDuplication->SetEnabledFunc([]() -> bool {
+		return g_Config.iFrameSkip == 0;
 	});
 
 	if (GetGPUBackend() == GPUBackend::VULKAN || GetGPUBackend() == GPUBackend::OPENGL) {
@@ -461,14 +481,13 @@ void GameSettingsScreen::CreateViews() {
 
 #if PPSSPP_PLATFORM(ANDROID) || PPSSPP_PLATFORM(IOS)
 	graphicsSettings->Add(new ItemHeader(gr->T("Cardboard VR Settings", "Cardboard VR Settings")));
-	CheckBox *cardboardMode = graphicsSettings->Add(new CheckBox(&g_Config.bEnableCardboardVR, gr->T("Enable Cardboard VR", "Enable Cardboard VR")));
-	cardboardMode->SetDisabledPtr(&g_Config.bSoftwareRendering);
-	PopupSliderChoice * cardboardScreenSize = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iCardboardScreenSize, 30, 100, gr->T("Cardboard Screen Size", "Screen Size (in % of the viewport)"), 1, screenManager(), gr->T("% of viewport")));
-	cardboardScreenSize->SetDisabledPtr(&g_Config.bSoftwareRendering);
+	graphicsSettings->Add(new CheckBox(&g_Config.bEnableCardboardVR, gr->T("Enable Cardboard VR", "Enable Cardboard VR")));
+	PopupSliderChoice *cardboardScreenSize = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iCardboardScreenSize, 30, 100, gr->T("Cardboard Screen Size", "Screen Size (in % of the viewport)"), 1, screenManager(), gr->T("% of viewport")));
+	cardboardScreenSize->SetEnabledPtr(&g_Config.bEnableCardboardVR);
 	PopupSliderChoice *cardboardXShift = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iCardboardXShift, -100, 100, gr->T("Cardboard Screen X Shift", "X Shift (in % of the void)"), 1, screenManager(), gr->T("% of the void")));
-	cardboardXShift->SetDisabledPtr(&g_Config.bSoftwareRendering);
+	cardboardXShift->SetEnabledPtr(&g_Config.bEnableCardboardVR);
 	PopupSliderChoice *cardboardYShift = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iCardboardYShift, -100, 100, gr->T("Cardboard Screen Y Shift", "Y Shift (in % of the void)"), 1, screenManager(), gr->T("% of the void")));
-	cardboardYShift->SetDisabledPtr(&g_Config.bSoftwareRendering);
+	cardboardYShift->SetEnabledPtr(&g_Config.bEnableCardboardVR);
 #endif
 
 	std::vector<std::string> cameraList = Camera::getDeviceList();
@@ -541,10 +560,6 @@ void GameSettingsScreen::CreateViews() {
 	CheckBox *extraAudio = audioSettings->Add(new CheckBox(&g_Config.bExtraAudioBuffering, a->T("AudioBufferingForBluetooth", "Bluetooth-friendly buffer (slower)")));
 	extraAudio->SetEnabledPtr(&g_Config.bEnableSound);
 #endif
-	if (System_GetPropertyInt(SYSPROP_AUDIO_SAMPLE_RATE) == 44100) {
-		CheckBox *resampling = audioSettings->Add(new CheckBox(&g_Config.bAudioResampler, a->T("Audio sync", "Audio sync (resampling)")));
-		resampling->SetEnabledPtr(&g_Config.bEnableSound);
-	}
 
 	// Control
 	ViewGroup *controlsSettingsScroll = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
@@ -765,8 +780,10 @@ void GameSettingsScreen::CreateViews() {
 
 	systemSettings->Add(new CheckBox(&g_Config.bFastMemory, sy->T("Fast Memory", "Fast Memory (Unstable)")))->OnClick.Handle(this, &GameSettingsScreen::OnJitAffectingSetting);
 
+	systemSettings->Add(new CheckBox(&g_Config.bSeparateIOThread, sy->T("I/O on thread (experimental)")))->SetEnabled(!PSP_IsInited());
 	static const char *ioTimingMethods[] = { "Fast (lag on slow storage)", "Host (bugs, less lag)", "Simulate UMD delays" };
 	View *ioTimingMethod = systemSettings->Add(new PopupMultiChoice(&g_Config.iIOTimingMethod, sy->T("IO timing method"), ioTimingMethods, 0, ARRAY_SIZE(ioTimingMethods), sy->GetName(), screenManager()));
+	ioTimingMethod->SetEnabledPtr(&g_Config.bSeparateIOThread);
 	systemSettings->Add(new CheckBox(&g_Config.bForceLagSync, sy->T("Force real clock sync (slower, less lag)")));
 	PopupSliderChoice *lockedMhz = systemSettings->Add(new PopupSliderChoice(&g_Config.iLockedCPUSpeed, 0, 1000, sy->T("Change CPU Clock", "Change CPU Clock (unstable)"), screenManager(), sy->T("MHz, 0:default")));
 	lockedMhz->OnChange.Add([&](UI::EventParams &) {
@@ -1195,14 +1212,25 @@ void GameSettingsScreen::CallbackMemstickFolder(bool yes) {
 }
 #endif
 
+void GameSettingsScreen::TriggerRestart(const char *why) {
+	// Extra save here to make sure the choice really gets saved even if there are shutdown bugs in
+	// the GPU backend code.
+	g_Config.Save(why);
+	std::string param = "--gamesettings";
+	if (editThenRestore_) {
+		// We won't pass the gameID, so don't resume back into settings.
+		param = "";
+	} else if (!gamePath_.empty()) {
+		param += " \"" + ReplaceAll(ReplaceAll(gamePath_, "\\", "\\\\"), "\"", "\\\"") + "\"";
+	}
+	System_SendMessage("graphics_restart", param.c_str());
+}
+
 void GameSettingsScreen::CallbackRenderingBackend(bool yes) {
 	// If the user ends up deciding not to restart, set the config back to the current backend
 	// so it doesn't get switched by accident.
 	if (yes) {
-		// Extra save here to make sure the choice really gets saved even if there are shutdown bugs in
-		// the GPU backend code.
-		g_Config.Save("GameSettingsScreen::RenderingBackendYes");
-		System_SendMessage("graphics_restart", "");
+		TriggerRestart("GameSettingsScreen::RenderingBackendYes");
 	} else {
 		g_Config.iGPUBackend = (int)GetGPUBackend();
 	}
@@ -1212,10 +1240,7 @@ void GameSettingsScreen::CallbackRenderingDevice(bool yes) {
 	// If the user ends up deciding not to restart, set the config back to the current backend
 	// so it doesn't get switched by accident.
 	if (yes) {
-		// Extra save here to make sure the choice really gets saved even if there are shutdown bugs in
-		// the GPU backend code.
-		g_Config.Save("GameSettingsScreen::RenderingDeviceYes");
-		System_SendMessage("graphics_restart", "");
+		TriggerRestart("GameSettingsScreen::RenderingDeviceYes");
 	} else {
 		std::string *deviceNameSetting = GPUDeviceNameSetting();
 		if (deviceNameSetting)
@@ -1227,8 +1252,7 @@ void GameSettingsScreen::CallbackRenderingDevice(bool yes) {
 
 void GameSettingsScreen::CallbackInflightFrames(bool yes) {
 	if (yes) {
-		g_Config.Save("GameSettingsScreen::InflightFramesYes");
-		System_SendMessage("graphics_restart", "");
+		TriggerRestart("GameSettingsScreen::InflightFramesYes");
 	} else {
 		g_Config.iInflightFrames = prevInflightFrames_;
 	}
@@ -1410,12 +1434,13 @@ UI::EventReturn GameSettingsScreen::OnPostProcShader(UI::EventParams &e) {
 
 UI::EventReturn GameSettingsScreen::OnPostProcShaderChange(UI::EventParams &e) {
 	NativeMessageReceived("gpu_resized", "");
+	RecreateViews(); // Update setting name
 	return UI::EVENT_DONE;
 }
 
 UI::EventReturn GameSettingsScreen::OnDeveloperTools(UI::EventParams &e) {
-screenManager()->push(new DeveloperToolsScreen());
-return UI::EVENT_DONE;
+	screenManager()->push(new DeveloperToolsScreen());
+	return UI::EVENT_DONE;
 }
 
 UI::EventReturn GameSettingsScreen::OnRemoteISO(UI::EventParams &e) {

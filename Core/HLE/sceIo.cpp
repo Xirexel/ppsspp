@@ -129,7 +129,7 @@ static MemStickFatState lastMemStickFatState;
 
 static AsyncIOManager ioManager;
 static bool ioManagerThreadEnabled = false;
-static std::thread ioManagerThread;
+static std::thread *ioManagerThread;
 
 // TODO: Is it better to just put all on the thread?
 // Let's try. (was 256)
@@ -649,10 +649,12 @@ void __IoInit() {
 
 	memset(fds, 0, sizeof(fds));
 
-	ioManagerThreadEnabled = true;
+	ioManagerThreadEnabled = g_Config.bSeparateIOThread;
 	ioManager.SetThreadEnabled(ioManagerThreadEnabled);
-	Core_ListenLifecycle(&__IoWakeManager);
-	ioManagerThread = std::thread(&__IoManagerThread);
+	if (ioManagerThreadEnabled) {
+		Core_ListenLifecycle(&__IoWakeManager);
+		ioManagerThread = new std::thread(&__IoManagerThread);
+	}
 
 	__KernelRegisterWaitTypeFuncs(WAITTYPE_ASYNCIO, __IoAsyncBeginCallback, __IoAsyncEndCallback);
 
@@ -733,8 +735,12 @@ void __IoShutdown() {
 	ioManagerThreadEnabled = false;
 	ioManager.SyncThread();
 	ioManager.FinishEventLoop();
-	ioManagerThread.join();
-	ioManager.Shutdown();
+	if (ioManagerThread != nullptr) {
+		ioManagerThread->join();
+		delete ioManagerThread;
+		ioManagerThread = nullptr;
+		ioManager.Shutdown();
+	}
 
 	for (int i = 0; i < PSP_COUNT_FDS; ++i) {
 		asyncParams[i].op = IoAsyncOp::NONE;
@@ -2865,7 +2871,7 @@ const HLEFunction StdioForKernel[] = {
 	{0X2CCF071A, nullptr,                                            "fdprintf",                                '?', ""   },
 	{0XD97C8CB9, nullptr,                                            "puts",                                    '?', ""   },
 	{0X172D316E, nullptr,                                            "sceKernelStdin",                          '?', ""   },
-	{0XA6BAB2E9, nullptr,                                            "sceKernelStdout",                         '?', ""   },
+	{0XA6BAB2E9, &WrapU_V<sceKernelStdout>,                          "sceKernelStdout",                         'i', "" ,HLE_KERNEL_SYSCALL },	
 	{0XF78BA90A, nullptr,                                            "sceKernelStderr",                         '?', ""   },
 };
 

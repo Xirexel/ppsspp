@@ -66,7 +66,8 @@
 #include "GPU/GPUState.h"
 
 enum {
-	PSP_THREAD_ATTR_USER = 0x80000000
+	PSP_THREAD_ATTR_KERNEL = 0x00001000,
+	PSP_THREAD_ATTR_USER = 0x80000000,
 };
 
 enum {
@@ -1608,6 +1609,16 @@ u32 __KernelGetModuleGP(SceUID uid) {
 	}
 }
 
+bool KernelModuleIsKernelMode(SceUID uid) {
+	u32 error;
+	PSPModule *module = kernelObjects.Get<PSPModule>(uid, error);
+	if (module) {
+		return (module->nm.attribute & 0x1000) != 0;
+	} else {
+		return false;
+	}
+}
+
 void __KernelLoadReset() {
 	// Wipe kernel here, loadexec should reset the entire system
 	if (__KernelIsRunning()) {
@@ -2535,6 +2546,7 @@ const HLEFunction ModuleMgrForKernel[] =
 	{0xA1A78C58, &WrapU_CUU<sceKernelLoadModuleForLoadExecVSHDisc>,     "sceKernelLoadModuleForLoadExecVSHDisc",   'x', "sxx",   HLE_KERNEL_SYSCALL }, //fix for tiger x dragon
 	{0x748CBED9, &WrapU_UU<sceKernelQueryModuleInfo>,                   "sceKernelQueryModuleInfo",                'x', "xx",    HLE_KERNEL_SYSCALL },
 	{0x644395E2, &WrapU_UUU<sceKernelGetModuleIdList>,                  "sceKernelGetModuleIdList",                'x', "xxx",   HLE_KERNEL_SYSCALL },
+	{0X2E0911AA, &WrapU_U<sceKernelUnloadModule>,                       "sceKernelUnloadModule",                   'x', "x" ,   HLE_KERNEL_SYSCALL },
 };
 
 void Register_ModuleMgrForUser()

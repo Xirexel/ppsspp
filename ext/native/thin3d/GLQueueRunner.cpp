@@ -161,8 +161,8 @@ void GLQueueRunner::RunInitSteps(const std::vector<GLRInitStep> &steps, bool ski
 		case GLRInitStepType::BUFFER_SUBDATA:
 		{
 			GLRBuffer *buffer = step.buffer_subdata.buffer;
-			glBindBuffer(GL_ARRAY_BUFFER, buffer->buffer_);
-			glBufferSubData(GL_ARRAY_BUFFER, step.buffer_subdata.offset, step.buffer_subdata.size, step.buffer_subdata.data);
+			glBindBuffer(buffer->target_, buffer->buffer_);
+			glBufferSubData(buffer->target_, step.buffer_subdata.offset, step.buffer_subdata.size, step.buffer_subdata.data);
 			if (step.buffer_subdata.deleteData)
 				delete[] step.buffer_subdata.data;
 			CHECK_GL_ERROR_IF_DEBUG();
@@ -796,7 +796,6 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step) {
 			}
 			if (c.clear.colorMask != colorMask) {
 				glColorMask(c.clear.colorMask & 1, (c.clear.colorMask >> 1) & 1, (c.clear.colorMask >> 2) & 1, (c.clear.colorMask >> 3) & 1);
-				colorMask = c.clear.colorMask;
 			}
 			if (c.clear.clearMask & GL_COLOR_BUFFER_BIT) {
 				float color[4];
@@ -818,6 +817,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step) {
 				glClearStencil(c.clear.clearStencil);
 			}
 			glClear(c.clear.clearMask);
+			// Restore the color mask if it was different.
+			if (c.clear.colorMask != colorMask) {
+				glColorMask(colorMask & 1, (colorMask >> 1) & 1, (colorMask >> 2) & 1, (colorMask >> 3) & 1);
+			}
 			if (c.clear.scissorW == 0) {
 				glEnable(GL_SCISSOR_TEST);
 			}
@@ -827,13 +830,16 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step) {
 		{
 			GLenum attachments[3];
 			int count = 0;
+			bool isFBO = step.render.framebuffer != nullptr;
+			bool hasDepth = isFBO ? step.render.framebuffer->z_stencil_ : false;
 			if (c.clear.clearMask & GL_COLOR_BUFFER_BIT)
-				attachments[count++] = GL_COLOR_ATTACHMENT0;
-			if (c.clear.clearMask & GL_DEPTH_BUFFER_BIT)
-				attachments[count++] = GL_DEPTH_ATTACHMENT;
-			if (c.clear.clearMask & GL_STENCIL_BUFFER_BIT)
-				attachments[count++] = GL_STENCIL_BUFFER_BIT;
-			glInvalidateFramebuffer(GL_FRAMEBUFFER, count, attachments);
+				attachments[count++] = isFBO ? GL_COLOR_ATTACHMENT0 : GL_COLOR;
+			if (hasDepth && (c.clear.clearMask & GL_DEPTH_BUFFER_BIT))
+				attachments[count++] = isFBO ? GL_DEPTH_ATTACHMENT : GL_DEPTH;
+			if (hasDepth && (c.clear.clearMask & GL_STENCIL_BUFFER_BIT))
+				attachments[count++] = isFBO ? GL_STENCIL_ATTACHMENT : GL_STENCIL;
+			if (glInvalidateFramebuffer != nullptr && count != 0)
+				glInvalidateFramebuffer(GL_FRAMEBUFFER, count, attachments);
 			CHECK_GL_ERROR_IF_DEBUG();
 			break;
 		}

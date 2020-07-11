@@ -225,6 +225,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/GeDisasm.cpp \
   $(SRC)/GPU/Common/DepalettizeShaderCommon.cpp \
   $(SRC)/GPU/Common/FramebufferCommon.cpp \
+  $(SRC)/GPU/Common/PresentationCommon.cpp \
   $(SRC)/GPU/Common/GPUDebugInterface.cpp \
   $(SRC)/GPU/Common/IndexGenerator.cpp.arm \
   $(SRC)/GPU/Common/ShaderId.cpp.arm \
@@ -360,6 +361,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/HLE/sceKernel.cpp \
   $(SRC)/Core/HLE/sceKernelAlarm.cpp \
   $(SRC)/Core/HLE/sceKernelEventFlag.cpp \
+  $(SRC)/Core/HLE/sceKernelHeap.cpp \
   $(SRC)/Core/HLE/sceKernelInterrupt.cpp \
   $(SRC)/Core/HLE/sceKernelMemory.cpp \
   $(SRC)/Core/HLE/sceKernelModule.cpp \

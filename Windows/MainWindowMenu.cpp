@@ -180,21 +180,18 @@ namespace MainWindow {
 		const char *translatedShaderName = nullptr;
 
 		availableShaders.clear();
-		if (GetGPUBackend() == GPUBackend::DIRECT3D9) {
-			translatedShaderName = ps->T("Not available in Direct3D9 backend");
-			AppendMenu(shaderMenu, MF_STRING | MF_BYPOSITION | MF_GRAYED, item++, ConvertUTF8ToWString(translatedShaderName).c_str());
-		} else {
-			for (auto i = info.begin(); i != info.end(); ++i) {
-				int checkedStatus = MF_UNCHECKED;
-				availableShaders.push_back(i->section);
-				if (g_Config.sPostShaderName == i->section) {
-					checkedStatus = MF_CHECKED;
-				}
-
-				translatedShaderName = ps->T(i->section.c_str(), i->name.c_str());
-
-				AppendMenu(shaderMenu, MF_STRING | MF_BYPOSITION | checkedStatus, item++, ConvertUTF8ToWString(translatedShaderName).c_str());
+		for (auto i = info.begin(); i != info.end(); ++i) {
+			if (!i->visible)
+				continue;
+			int checkedStatus = MF_UNCHECKED;
+			availableShaders.push_back(i->section);
+			if (g_Config.sPostShaderName == i->section) {
+				checkedStatus = MF_CHECKED;
 			}
+
+			translatedShaderName = ps->T(i->section.c_str(), i->name.c_str());
+
+			AppendMenu(shaderMenu, MF_STRING | MF_BYPOSITION | checkedStatus, item++, ConvertUTF8ToWString(translatedShaderName).c_str());
 		}
 
 		menuShaderInfo = info;
@@ -637,14 +634,14 @@ namespace MainWindow {
 		case ID_FILE_LOADSTATEFILE:
 			if (W32Util::BrowseForFileName(true, hWnd, L"Load state", 0, L"Save States (*.ppst)\0*.ppst\0All files\0*.*\0\0", L"ppst", fn)) {
 				SetCursor(LoadCursor(0, IDC_WAIT));
-				SaveState::Load(fn, SaveStateActionFinished);
+				SaveState::Load(fn, -1, SaveStateActionFinished);
 			}
 			break;
 
 		case ID_FILE_SAVESTATEFILE:
 			if (W32Util::BrowseForFileName(false, hWnd, L"Save state", 0, L"Save States (*.ppst)\0*.ppst\0All files\0*.*\0\0", L"ppst", fn)) {
 				SetCursor(LoadCursor(0, IDC_WAIT));
-				SaveState::Save(fn, SaveStateActionFinished);
+				SaveState::Save(fn, -1, SaveStateActionFinished);
 			}
 			break;
 

@@ -156,9 +156,13 @@ void DrawEngineGLES::ClearInputLayoutMap() {
 }
 
 void DrawEngineGLES::BeginFrame() {
+	DecimateTrackedVertexArrays();
+
 	FrameData &frameData = frameData_[render_->GetCurFrame()];
 	render_->BeginPushBuffer(frameData.pushIndex);
 	render_->BeginPushBuffer(frameData.pushVertex);
+
+	lastRenderStepId_ = -1;
 }
 
 void DrawEngineGLES::EndFrame() {
@@ -305,6 +309,15 @@ void DrawEngineGLES::DoFlush() {
 	gpuStats.numFlushes++;
 	gpuStats.numTrackedVertexArrays = (int)vai_.size();
 
+	// A new render step means we need to flush any dynamic state. Really, any state that is reset in
+	// GLQueueRunner::PerformRenderPass.
+	int curRenderStepId = render_->GetCurrentStepId();
+	if (lastRenderStepId_ != curRenderStepId) {
+		// Dirty everything that has dynamic state that will need re-recording.
+		gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_BLEND_STATE | DIRTY_RASTER_STATE);
+		lastRenderStepId_ = curRenderStepId;
+	}
+
 	bool textureNeedsApply = false;
 	if (gstate_c.IsDirty(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS) && !gstate.isModeClear() && gstate.isTextureMapEnabled()) {
 		textureCache_->SetTexture();
@@ -426,7 +439,7 @@ void DrawEngineGLES::DoFlush() {
 						// for a very minor speed boost.
 						if (useElements) {
 							size_t esz = sizeof(short) * indexGen.VertexCount();
-							vai->ebo = render_->CreateBuffer(GL_ARRAY_BUFFER, esz, GL_STATIC_DRAW);
+							vai->ebo = render_->CreateBuffer(GL_ELEMENT_ARRAY_BUFFER, esz, GL_STATIC_DRAW);
 							render_->BufferSubdata(vai->ebo, 0, esz, (uint8_t *)decIndex, false);
 						} else {
 							vai->ebo = 0;
@@ -538,9 +551,6 @@ rotateVBO:
 		if (prim == GE_PRIM_TRIANGLE_STRIP)
 			prim = GE_PRIM_TRIANGLES;
 
-		TransformedVertex *drawBuffer = NULL;
-		int numTrans;
-		bool drawIndexed = false;
 		u16 *inds = decIndex;
 		SoftwareTransformResult result{};
 		// TODO: Keep this static?  Faster than repopulating?
@@ -563,16 +573,19 @@ rotateVBO:
 			vertexCount = 0x10000 / 3;
 #endif
 
+		SoftwareTransform swTransform(params);
+		swTransform.Decode(prim, dec_->VertexType(), dec_->GetDecVtxFmt(), maxIndex, &result);
+		if (result.action == SW_NOT_READY)
+			swTransform.DetectOffsetTexture(maxIndex);
+
 		if (textureNeedsApply)
 			textureCache_->ApplyTexture();
 
 		// Need to ApplyDrawState after ApplyTexture because depal can launch a render pass and that wrecks the state.
 		ApplyDrawState(prim);
 
-		SoftwareTransform(
-			prim, vertexCount,
-			dec_->VertexType(), inds, GE_VTYPE_IDX_16BIT, dec_->GetDecVtxFmt(),
-			maxIndex, drawBuffer, numTrans, drawIndexed, &params, &result);
+		if (result.action == SW_NOT_READY)
+			swTransform.BuildDrawingParams(prim, vertexCount, dec_->VertexType(), inds, maxIndex, &result);
 
 		ApplyDrawStateLate(result.setStencil, result.stencilValue);
 
@@ -583,16 +596,16 @@ rotateVBO:
 
 			bool doTextureProjection = gstate.getUVGenMode() == GE_TEXMAP_TEXTURE_MATRIX;
 
-			if (drawIndexed) {
-				vertexBufferOffset = (uint32_t)frameData.pushVertex->Push(drawBuffer, maxIndex * sizeof(TransformedVertex), &vertexBuffer);
-				indexBufferOffset = (uint32_t)frameData.pushIndex->Push(inds, sizeof(uint16_t) * numTrans, &indexBuffer);
+			if (result.drawIndexed) {
+				vertexBufferOffset = (uint32_t)frameData.pushVertex->Push(result.drawBuffer, maxIndex * sizeof(TransformedVertex), &vertexBuffer);
+				indexBufferOffset = (uint32_t)frameData.pushIndex->Push(inds, sizeof(uint16_t) * result.drawNumTrans, &indexBuffer);
 				render_->BindVertexBuffer(softwareInputLayout_, vertexBuffer, vertexBufferOffset);
 				render_->BindIndexBuffer(indexBuffer);
-				render_->DrawIndexed(glprim[prim], numTrans, GL_UNSIGNED_SHORT, (void *)(intptr_t)indexBufferOffset);
+				render_->DrawIndexed(glprim[prim], result.drawNumTrans, GL_UNSIGNED_SHORT, (void *)(intptr_t)indexBufferOffset);
 			} else {
-				vertexBufferOffset = (uint32_t)frameData.pushVertex->Push(drawBuffer, numTrans * sizeof(TransformedVertex), &vertexBuffer);
+				vertexBufferOffset = (uint32_t)frameData.pushVertex->Push(result.drawBuffer, result.drawNumTrans * sizeof(TransformedVertex), &vertexBuffer);
 				render_->BindVertexBuffer(softwareInputLayout_, vertexBuffer, vertexBufferOffset);
-				render_->Draw(glprim[prim], 0, numTrans);
+				render_->Draw(glprim[prim], 0, result.drawNumTrans);
 			}
 		} else if (result.action == SW_CLEAR) {
 			u32 clearColor = result.color;

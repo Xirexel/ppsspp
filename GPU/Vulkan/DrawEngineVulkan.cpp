@@ -259,8 +259,9 @@ void DrawEngineVulkan::DeviceRestore(VulkanContext *vulkan, Draw::DrawContext *d
 }
 
 void DrawEngineVulkan::BeginFrame() {
-	// Too many issues right now to allow reuse.
 	lastPipeline_ = nullptr;
+
+	lastRenderStepId_ = -1;
 
 	int curFrame = vulkan_->GetCurFrame();
 	FrameData *frame = &frame_[curFrame];
@@ -587,10 +588,18 @@ void DrawEngineVulkan::DoFlush() {
 
 	VulkanRenderManager *renderManager = (VulkanRenderManager *)draw_->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
 	
-	// HACK: These two lines should only execute if we started on a new render pass. Can't tell from in here though...
+	// TODO: Needs to be behind a check for changed render pass, at an appropriate time in this function.
+	// Similar issues as with the lastRenderStepId_ check. Will need a bit of a rethink.
 	lastPipeline_ = nullptr;
-	// Since we have a new cmdbuf, dirty our dynamic state so it gets re-set.
-	// gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE|DIRTY_DEPTHSTENCIL_STATE|DIRTY_BLEND_STATE);
+	// If have a new render pass, dirty our dynamic state so it gets re-set.
+	// We have to do this again after the last possible place in DoFlush that can cause a renderpass switch
+	// like a shader blend blit or similar. But before we actually set the state!
+	int curRenderStepId = renderManager->GetCurrentStepId();
+	if (lastRenderStepId_ != curRenderStepId) {
+		// Dirty everything that has dynamic state that will need re-recording.
+		gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_BLEND_STATE);
+		lastRenderStepId_ = curRenderStepId;
+	}
 
 	FrameData *frame = &frame_[vulkan_->GetCurFrame()];
 
@@ -824,6 +833,17 @@ void DrawEngineVulkan::DoFlush() {
 				return;
 			}
 			BindShaderBlendTex();  // This might cause copies so important to do before BindPipeline.
+
+			// If have a new render pass, dirty our dynamic state so it gets re-set.
+			// WARNING: We have to do this AFTER the last possible place in DoFlush that can cause a renderpass switch
+			// like a shader blend blit or similar. But before we actually set the state!
+			int curRenderStepId = renderManager->GetCurrentStepId();
+			if (lastRenderStepId_ != curRenderStepId) {
+				// Dirty everything that has dynamic state that will need re-recording.
+				gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_BLEND_STATE);
+				lastRenderStepId_ = curRenderStepId;
+			}
+
 			renderManager->BindPipeline(pipeline->pipeline);
 			if (pipeline != lastPipeline_) {
 				if (lastPipeline_ && !(lastPipeline_->UsesBlendConstant() && pipeline->UsesBlendConstant())) {
@@ -880,10 +900,7 @@ void DrawEngineVulkan::DoFlush() {
 			prim = GE_PRIM_TRIANGLES;
 		VERBOSE_LOG(G3D, "Flush prim %i SW! %i verts in one go", prim, indexGen.VertexCount());
 
-		int numTrans = 0;
-		bool drawIndexed = false;
 		u16 *inds = decIndex;
-		TransformedVertex *drawBuffer = nullptr;
 		SoftwareTransformResult result{};
 		SoftwareTransformParams params{};
 		params.decoded = decoded;
@@ -906,10 +923,12 @@ void DrawEngineVulkan::DoFlush() {
 		}
 
 		int maxIndex = indexGen.MaxIndex();
-		SoftwareTransform(
-			prim, indexGen.VertexCount(),
-			dec_->VertexType(), inds, GE_VTYPE_IDX_16BIT, dec_->GetDecVtxFmt(),
-			maxIndex, drawBuffer, numTrans, drawIndexed, &params, &result);
+		SoftwareTransform swTransform(params);
+		swTransform.Decode(prim, dec_->VertexType(), dec_->GetDecVtxFmt(), maxIndex, &result);
+		if (result.action == SW_NOT_READY) {
+			swTransform.DetectOffsetTexture(maxIndex);
+			swTransform.BuildDrawingParams(prim, indexGen.VertexCount(), dec_->VertexType(), inds, maxIndex, &result);
+		}
 
 		// Only here, where we know whether to clear or to draw primitives, should we actually set the current framebuffer! Because that gives use the opportunity
 		// to use a "pre-clear" render pass, for high efficiency on tilers.
@@ -936,6 +955,17 @@ void DrawEngineVulkan::DoFlush() {
 					return;
 				}
 				BindShaderBlendTex();  // This might cause copies so super important to do before BindPipeline.
+
+				// If have a new render pass, dirty our dynamic state so it gets re-set.
+				// WARNING: We have to do this AFTER the last possible place in DoFlush that can cause a renderpass switch
+				// like a shader blend blit or similar. But before we actually set the state!
+				int curRenderStepId = renderManager->GetCurrentStepId();
+				if (lastRenderStepId_ != curRenderStepId) {
+					// Dirty everything that has dynamic state that will need re-recording.
+					gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_BLEND_STATE);
+					lastRenderStepId_ = curRenderStepId;
+				}
+
 				renderManager->BindPipeline(pipeline->pipeline);
 				if (pipeline != lastPipeline_) {
 					if (lastPipeline_ && !lastPipeline_->UsesBlendConstant() && pipeline->UsesBlendConstant()) {
@@ -965,17 +995,17 @@ void DrawEngineVulkan::DoFlush() {
 
 			PROFILE_THIS_SCOPE("renderman_q");
 
-			if (drawIndexed) {
+			if (result.drawIndexed) {
 				VkBuffer vbuf, ibuf;
-				vbOffset = (uint32_t)frame->pushVertex->Push(drawBuffer, maxIndex * sizeof(TransformedVertex), &vbuf);
-				ibOffset = (uint32_t)frame->pushIndex->Push(inds, sizeof(short) * numTrans, &ibuf);
+				vbOffset = (uint32_t)frame->pushVertex->Push(result.drawBuffer, maxIndex * sizeof(TransformedVertex), &vbuf);
+				ibOffset = (uint32_t)frame->pushIndex->Push(inds, sizeof(short) * result.drawNumTrans, &ibuf);
 				VkDeviceSize offsets[1] = { vbOffset };
-				renderManager->DrawIndexed(pipelineLayout_, ds, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, ibuf, ibOffset, numTrans, 1, VK_INDEX_TYPE_UINT16);
+				renderManager->DrawIndexed(pipelineLayout_, ds, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, ibuf, ibOffset, result.drawNumTrans, 1, VK_INDEX_TYPE_UINT16);
 			} else {
 				VkBuffer vbuf;
-				vbOffset = (uint32_t)frame->pushVertex->Push(drawBuffer, numTrans * sizeof(TransformedVertex), &vbuf);
+				vbOffset = (uint32_t)frame->pushVertex->Push(result.drawBuffer, result.drawNumTrans * sizeof(TransformedVertex), &vbuf);
 				VkDeviceSize offsets[1] = { vbOffset };
-				renderManager->Draw(pipelineLayout_, ds, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, numTrans);
+				renderManager->Draw(pipelineLayout_, ds, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, result.drawNumTrans);
 			}
 		} else if (result.action == SW_CLEAR) {
 			// Note: we won't get here if the clear is alpha but not color, or color but not alpha.
